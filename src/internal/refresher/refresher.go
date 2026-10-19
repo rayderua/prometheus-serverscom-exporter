@@ -22,8 +22,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"serverscom-exporter/internal/api"
-	"serverscom-exporter/internal/cache"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/api"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/cache"
 )
 
 // API is the subset of api.Client used by the refresher.

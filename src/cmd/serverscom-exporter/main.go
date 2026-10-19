@@ -26,10 +26,10 @@ import (
 	"github.com/prometheus/exporter-toolkit/web"
 	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
 
-	"serverscom-exporter/internal/api"
-	"serverscom-exporter/internal/cache"
-	"serverscom-exporter/internal/collector"
-	"serverscom-exporter/internal/refresher"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/api"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/cache"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/collector"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/refresher"
 )
 
 const exporterName = "serverscom_exporter"

@@ -14,6 +14,9 @@ ARG VERSION=dev
 ARG REVISION=unknown
 ARG BRANCH=unknown
 ARG BUILD_DATE=unknown
+# Optional module proxy, e.g. an Athens or Nexus instance. Empty means the Go
+# default (proxy.golang.org). Checksums are still verified against go.sum.
+ARG GOPROXY
 
 WORKDIR /src
 
@@ -37,12 +40,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -X github.com/prometheus/common/version.BuildDate=${BUILD_DATE}" \
       -o /out/serverscom-exporter ./cmd/serverscom-exporter
 
+# Directory for --cache.file. The runtime image has no shell to create it, so
+# it is prepared here; Docker named volumes mounted at /data inherit its owner.
+RUN mkdir -p /out/data
+
 # distroless/static: CA certificates and tzdata only, no shell, runs as
-# uid 65532. The cache file needs a writable volume, e.g.
-#   --cache.file=/data/cache.json with a volume mounted at /data.
+# uid 65532. To persist the cache use --cache.file=/data/cache.json with a
+# volume mounted at /data.
 FROM gcr.io/distroless/static-debian13:nonroot
 
 COPY --from=build /out/serverscom-exporter /usr/bin/serverscom-exporter
+COPY --from=build --chown=nonroot:nonroot /out/data /data
 
 USER nonroot:nonroot
 EXPOSE 9920

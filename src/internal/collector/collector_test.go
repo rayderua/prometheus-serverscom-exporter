@@ -8,8 +8,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"serverscom-exporter/internal/api"
-	"serverscom-exporter/internal/cache"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/api"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/cache"
 )
 
 func testStore() *cache.Store {

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"serverscom-exporter/internal/api"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/api"
 )
 
 // Resource names a group of cached data refreshed together.

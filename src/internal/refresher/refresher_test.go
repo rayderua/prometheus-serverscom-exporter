@@ -9,8 +9,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"serverscom-exporter/internal/api"
-	"serverscom-exporter/internal/cache"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/api"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/cache"
 )
 
 // fakeAPI serves fixed data and counts calls per method.

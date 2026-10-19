@@ -1,4 +1,4 @@
-module serverscom-exporter
+module github.com/rayderua/prometheus-serverscom-exporter/src
 
 go 1.27.0
 

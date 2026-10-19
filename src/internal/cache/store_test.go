@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"serverscom-exporter/internal/api"
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/api"
 )
 
 func TestStorePersistsAndLoads(t *testing.T) {

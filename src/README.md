@@ -112,6 +112,8 @@ docker build -t serverscom-exporter \
 ```
 
 Multi-arch builds work with `docker buildx build --platform linux/amd64,linux/arm64`.
+To download modules through your own proxy (Athens, Nexus, ...), pass
+`--build-arg GOPROXY=https://...`; checksums are still verified against `go.sum`.
 
 To persist the cache across restarts, mount a writable volume and point
 `--cache.file` at it:
