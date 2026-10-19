@@ -2,6 +2,7 @@ package refresher
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -18,6 +19,9 @@ type fakeAPI struct {
 	mu      sync.Mutex
 	calls   map[string]int
 	servers []api.DedicatedServer
+
+	// failPowerFeeds makes ListPowerFeeds return an API error.
+	failPowerFeeds bool
 }
 
 func (f *fakeAPI) count(name string) {
@@ -65,7 +69,12 @@ func (f *fakeAPI) ListNetworks(context.Context, string) ([]api.Network, error) {
 func (f *fakeAPI) ListFeatures(context.Context, string) ([]api.Feature, error) { return nil, nil }
 
 func (f *fakeAPI) ListPowerFeeds(context.Context, string) ([]api.PowerFeed, error) {
-	return nil, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failPowerFeeds {
+		return nil, &api.Error{StatusCode: 403}
+	}
+	return []api.PowerFeed{{Name: "Power 1", Status: "on"}}, nil
 }
 
 func (f *fakeAPI) ListL2Segments(context.Context) ([]api.L2Segment, error) {
@@ -181,6 +190,31 @@ func TestL2AndReference(t *testing.T) {
 		if snapshot.LastSuccess[resource].IsZero() {
 			t.Errorf("last success of %s not recorded", resource)
 		}
+	}
+}
+
+func TestFailedSubResourceKeepsTheRest(t *testing.T) {
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1"}}}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+
+	// Power feeds start failing; force a refetch by expiring the details.
+	fake.mu.Lock()
+	fake.failPowerFeeds = true
+	fake.mu.Unlock()
+	if err := r.refreshHostDetails(ctx, "h1"); !errors.Is(err, errPartialDetails) {
+		t.Fatalf("err = %v, want errPartialDetails", err)
+	}
+
+	details := r.store.Snapshot().Hosts["h1"].Details
+	if len(details.DriveSlots) != 1 {
+		t.Fatalf("drive slots lost because power feeds failed: %+v", details.DriveSlots)
+	}
+	if len(details.PowerFeeds) != 1 {
+		t.Fatalf("previous power feeds not kept: %+v", details.PowerFeeds)
 	}
 }
 

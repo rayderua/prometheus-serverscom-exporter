@@ -118,6 +118,7 @@ func (s *Store) Save() error {
 		s.dirty.Store(true)
 		return err
 	}
+	s.logger.Debug("Cache saved", "path", s.path, "bytes", len(data))
 	return nil
 }
 

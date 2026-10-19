@@ -72,6 +72,10 @@ type Client struct {
 
 	mu        sync.Mutex
 	rateLimit RateLimit
+
+	// pauseLoggedFor is the reset time of the last logged pause, so a pause is
+	// logged once rather than by every waiting request.
+	pauseLoggedFor time.Time
 }
 
 // RateLimit is the account-wide rate limit state reported by the API.
@@ -211,6 +215,8 @@ func (c *Client) do(ctx context.Context, endpoint, rawURL string, out any) (stri
 
 	c.metrics.requests.WithLabelValues(endpoint, strconv.Itoa(resp.StatusCode)).Inc()
 	c.updateRateLimit(resp.Header)
+	c.logger.Debug("API request", "endpoint", endpoint, "status", resp.StatusCode,
+		"duration", time.Since(start).Round(time.Millisecond), "ratelimit_remaining", c.RateLimit().Remaining)
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
@@ -239,8 +245,14 @@ func (c *Client) waitForTurn(ctx context.Context) error {
 	}
 
 	wait := time.Until(rl.Reset)
-	c.logger.Warn("Account rate limit reserve reached, pausing API requests",
-		"remaining", rl.Remaining, "reserve", c.reserve, "resume_in", wait.Round(time.Second))
+	c.mu.Lock()
+	firstWaiter := !c.pauseLoggedFor.Equal(rl.Reset)
+	c.pauseLoggedFor = rl.Reset
+	c.mu.Unlock()
+	if firstWaiter {
+		c.logger.Warn("Account rate limit reserve reached, pausing API requests",
+			"remaining", rl.Remaining, "reserve", c.reserve, "resume_in", wait.Round(time.Second))
+	}
 	return sleep(ctx, wait)
 }
 

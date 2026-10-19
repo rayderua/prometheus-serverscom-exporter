@@ -110,6 +110,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger.Info("Configuration",
+		"api_url", *apiURL, "requests_per_hour", *apiBudget,
+		"request_interval", (time.Hour / time.Duration(max(*apiBudget, 1))).Round(time.Millisecond),
+		"ratelimit_reserve", *apiReserve, "cache_file", *cacheFile)
+
 	store := cache.NewStore(*cacheFile, logger.With("component", "cache"))
 	store.Load()
 
