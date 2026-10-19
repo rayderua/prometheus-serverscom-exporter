@@ -1,0 +1,36 @@
+# --- JetBrains (GoLand / IntelliJ) ---
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# --- Go ---
+# Exporter binary built from src/
+/src/serverscom-exporter
+/src/bin/
+*.test
+*.out
+coverage.*
+go.work
+go.work.sum
+
+# --- Exporter runtime ---
+# Local cache file (--cache.file) and its temporary files
+cache.json
+*.json.tmp-*
+
+# --- Helm ---
+# Packaged charts and downloaded chart dependencies
+charts/**/*.tgz
+charts/*/charts/
+
+# --- Secrets / local env ---
+.env
+*.token
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
