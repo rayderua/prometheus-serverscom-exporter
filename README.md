@@ -609,6 +609,8 @@ GitHub Actions ([`.github/workflows`](.github/workflows)):
 
   Go jobs use the latest Go 1.27 patch release, so govulncheck does not
   report standard library issues fixed since the version in `go.mod`.
+- **Dev builds** of the image and the chart from `development`, see
+  [Dev builds](#dev-builds).
 - **Releases** are made from tags on commits of `main`; tags elsewhere fail.
   The exporter image and the chart are versioned independently.
 
@@ -633,6 +635,34 @@ git tag chart-0.3.1 && git push origin chart-0.3.1
 
 Chart-only changes need just the `version` bump and a `chart-*` tag. The chart
 release fails if the image of its `appVersion` is not published yet.
+
+### Dev builds
+
+Every push to `development` that passes CI publishes a dev build (workflow
+*Dev build*, can also be started by hand on `development`):
+
+| What | Where | Version |
+|------|-------|---------|
+| Image, linux/amd64 and linux/arm64 | `ghcr.io/rayderua/prometheus-serverscom-exporter` | `X.Y.Z-dev.N`, `dev` (latest dev build), `sha-<commit>` |
+| Chart, OCI only | `oci://ghcr.io/rayderua/charts/serverscom-exporter` | `X.Y.Z-dev.N`, `appVersion` `X.Y.Z-dev.N` |
+
+`X.Y.Z` comes from `version` and `appVersion` in `Chart.yaml`, `N` is the
+run number; the job summary shows the exact versions. Dev versions are SemVer
+pre-releases: `helm install` without `--version` or `--devel` keeps installing
+the latest release, and dev builds never reach the Helm repository on
+gh-pages, GitHub releases or the `latest` image tag.
+
+```sh
+# latest dev build
+helm upgrade --install serverscom-exporter \
+  oci://ghcr.io/rayderua/charts/serverscom-exporter --devel -f values.yaml
+# a specific one
+helm upgrade --install serverscom-exporter \
+  oci://ghcr.io/rayderua/charts/serverscom-exporter --version 0.2.0-dev.17 -f values.yaml
+```
+
+Dev builds accumulate in ghcr; delete old versions in the package settings
+when needed.
 
 ## Known gaps
 
