@@ -1,0 +1,65 @@
+suite: prometheusrule
+templates:
+  - prometheusrule.yaml
+set:
+  apiToken.value: test
+tests:
+  - it: is disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: adds all alerts selecting the release target
+    release:
+      name: exporter
+      namespace: monitoring
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 5
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: ServerscomExporterDown
+      - equal:
+          path: spec.groups[0].rules[0].expr
+          value: up{namespace="monitoring", service="exporter-serverscom-exporter"} == 0
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: 'resource="hosts"\} > 3600$'
+
+  - it: keeps alert templates for Prometheus
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.groups[0].rules[0].annotations.description
+          pattern: '\{\{ \$labels.instance \}\}'
+
+  - it: disables single alerts and adds labels and rules
+    set:
+      prometheusRule:
+        enabled: true
+        alerts:
+          budgetExhausted: false
+          ratelimitLow: false
+        staleThreshold: 7200
+        additionalLabels:
+          team: infra
+        rules:
+          - alert: Custom
+            expr: vector(1)
+    asserts:
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 4
+      - equal:
+          path: spec.groups[0].rules[0].labels.team
+          value: infra
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: '> 7200$'
+      - equal:
+          path: spec.groups[0].rules[3].alert
+          value: Custom

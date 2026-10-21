@@ -1,0 +1,38 @@
+suite: servicemonitor
+templates:
+  - servicemonitor.yaml
+set:
+  apiToken.value: test
+tests:
+  - it: is disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: scrapes the metrics path of the release Service
+    release:
+      namespace: monitoring
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.namespace: prometheus
+      serviceMonitor.labels:
+        release: kube-prometheus-stack
+      config.metricsPath: /custom
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: metadata.namespace
+          value: prometheus
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value: [monitoring]
+      - equal:
+          path: spec.endpoints[0].path
+          value: /custom
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 1m

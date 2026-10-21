@@ -3,6 +3,11 @@ name: Release chart
 # Chart releases are made from tags chart-X.Y.Z on commits of the main branch.
 # The tag must match `version` in Chart.yaml, and the image of `appVersion`
 # must already be released (see release-image.yml).
+#
+# The chart is published twice:
+#   - OCI:       oci://ghcr.io/<owner>/charts/serverscom-exporter
+#   - Helm repo: https://<owner>.github.io/<repo>, index.yaml on the gh-pages
+#                branch pointing to the chart attached to the GitHub release
 on:
   push:
     tags: ["chart-[0-9]+.[0-9]+.[0-9]+*"]
@@ -24,6 +29,10 @@ jobs:
   chart:
     name: Helm chart
     runs-on: ubuntu-latest
+    # One writer of gh-pages/index.yaml at a time.
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
     permissions:
       contents: write
       packages: write
@@ -93,3 +102,20 @@ jobs:
           printf 'Chart: `helm install serverscom-exporter %s/serverscom-exporter --version %s`\n\nImage (appVersion): `%s:%s`\n' \
             "$CHART_REPO" "$CHART_VERSION" "$IMAGE" "$APP_VERSION" > notes.md
           gh release create "$GITHUB_REF_NAME" "dist/serverscom-exporter-${CHART_VERSION}.tgz" "${flags[@]}"
+
+      - name: Update the Helm repository on gh-pages
+        run: |
+          git fetch --no-tags origin gh-pages
+          git worktree add pages origin/gh-pages
+          merge=()
+          [[ -f pages/index.yaml ]] && merge=(--merge pages/index.yaml)
+          helm repo index dist \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" \
+            "${merge[@]}"
+          cp dist/index.yaml pages/index.yaml
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.yaml
+          git commit -m "Release chart ${CHART_VERSION}"
+          git push origin HEAD:gh-pages

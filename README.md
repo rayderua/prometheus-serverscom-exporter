@@ -119,6 +119,13 @@ helm install serverscom-exporter oci://ghcr.io/rayderua/charts/serverscom-export
   --set prometheusRule.enabled=true
 ```
 
+The chart is also available from a classic Helm repository:
+
+```sh
+helm repo add serverscom https://rayderua.github.io/prometheus-serverscom-exporter
+helm install serverscom-exporter serverscom/serverscom-exporter -n monitoring ...
+```
+
 See [Kubernetes](#kubernetes) and the [chart README](charts/serverscom-exporter/README.md).
 
 ### From source
@@ -432,24 +439,50 @@ budget and account limit.
 
 ## Development
 
-Requirements: Go (version from [`src/go.mod`](src/go.mod)), Docker with
-buildx, Helm 3.8+ or 4.
+Requirements: Go (version from [`src/go.mod`](src/go.mod), latest patch
+release), Docker with buildx, Helm 3.8+ or 4, and for some checks
+[golangci-lint](https://golangci-lint.run/), the
+[helm-unittest](https://github.com/helm-unittest/helm-unittest) plugin and
+`promtool` from Prometheus.
+
+### Tests
+
+| What | Command | Where |
+|------|---------|-------|
+| Go unit tests | `go test -race ./...` | `src/` |
+| Go linters | `golangci-lint run ./...`, `go vet ./...` | `src/` |
+| Known vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | `src/` |
+| Image smoke test | `test/smoke.sh <image>` | `src/` |
+| Binary smoke test | `EXPORTER_BIN=./serverscom-exporter test/smoke.sh` | `src/` |
+| Chart lint | `helm lint --strict charts/serverscom-exporter --set apiToken.value=test` | repo root |
+| Chart unit tests | `helm unittest charts/serverscom-exporter` | repo root |
+| Alert rule tests | `promtool test rules grafana/alerts/tests/*.test.yml` | repo root |
+
+The **smoke test** starts [`src/test/mockapi`](src/test/mockapi/main.go), a
+fake Servers.com API with two servers and one L2 segment, runs the exporter
+image (or a local binary) against it with `--api.page-size=1` to exercise
+pagination, and checks `/-/healthy` and the main metrics. Then it stops the
+API, restarts the exporter and checks that the same data is served from the
+cache file. The mock is handy for local development as well:
 
 ```sh
-# tests (from src/)
 cd src
-go vet ./...
-go test -race ./...
+go run ./test/mockapi --listen=:8080 --token=test &
+go run ./cmd/serverscom-exporter --api.url=http://localhost:8080/v1 --api.token=test
+```
 
-# image
+Chart unit tests live in
+[`charts/serverscom-exporter/tests/`](charts/serverscom-exporter/tests) and are
+not packaged. With Helm 4, install the plugin with
+`helm plugin install https://github.com/helm-unittest/helm-unittest --verify=false`.
+
+### Build
+
+```sh
 docker build -t prometheus-serverscom-exporter \
   --build-arg VERSION=$(git describe --tags --match 'v*' --always) \
   --build-arg REVISION=$(git rev-parse HEAD) \
   src/
-
-# chart
-helm lint --strict charts/serverscom-exporter --set apiToken.value=test
-helm template test charts/serverscom-exporter --set apiToken.value=test
 ```
 
 Code layout under `src/internal/`:
@@ -467,20 +500,32 @@ Branches: work happens on `development`; releases are made from `main`.
 
 GitHub Actions ([`.github/workflows`](.github/workflows)):
 
-- **CI** (every push and pull request): `gofmt`, `go vet`, `go test -race`, a
-  multi-arch Docker build without push, `helm lint`, manifest validation with
-  kubeconform, and a check that the chart `version` was bumped if the chart
-  changed since its last release.
+- **CI** (every push and pull request), jobs:
+  - *Go tests*: `go test -race` with a per-package coverage table in the job
+    summary and `coverage.out` as an artifact;
+  - *Go lint*: `gofmt`, `go vet`, golangci-lint, govulncheck;
+  - *Docker image*: linux/amd64 and linux/arm64 build without push, then the
+    smoke test of the amd64 image against the mock API;
+  - *Helm chart*: version bump check, `helm lint`, helm-unittest, kubeconform,
+    `promtool check rules` on the rendered PrometheusRule;
+  - *Alert rules*: `promtool check rules` and `promtool test rules` for
+    [`grafana/alerts`](grafana/alerts).
+
+  Go jobs use the latest Go 1.27 patch release, so govulncheck does not
+  report standard library issues fixed since the version in `go.mod`.
 - **Releases** are made from tags on commits of `main`; tags elsewhere fail.
   The exporter image and the chart are versioned independently.
 
 | Tag | Releases | Version |
 |-----|----------|---------|
 | `vX.Y.Z`, `vX.Y.Z-rc.N` | image `ghcr.io/rayderua/prometheus-serverscom-exporter` (`X.Y.Z`, `X.Y`, `latest`; pre-releases only their own tag), linux/amd64 and linux/arm64 | from the tag |
-| `chart-X.Y.Z` | chart `oci://ghcr.io/rayderua/charts/serverscom-exporter` | `version` in `Chart.yaml`, must match the tag |
+| `chart-X.Y.Z` | chart `oci://ghcr.io/rayderua/charts/serverscom-exporter` and the Helm repository `https://rayderua.github.io/prometheus-serverscom-exporter` | `version` in `Chart.yaml`, must match the tag |
 
 Each tag also creates a GitHub release; only image releases are marked
-"Latest".
+"Latest". An image is pushed only after it passes the smoke test. For the
+Helm repository, the release workflow adds the chart to `index.yaml` on the
+`gh-pages` branch; the entry points to the `.tgz` attached to the GitHub
+release. GitHub Pages must be enabled for the `gh-pages` branch.
 
 New exporter version:
 

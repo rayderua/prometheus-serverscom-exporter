@@ -13,11 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Latest 1.27 patch release, not the minimum from go.mod: govulncheck
+  # reports standard library vulnerabilities of the Go version it runs with.
+  GO_VERSION: "1.27"
+  GOLANGCI_LINT_VERSION: v2.14.0
+  GOVULNCHECK_VERSION: v1.9.0
   HELM_VERSION: v4.2.0
+  HELM_UNITTEST_VERSION: v1.2.1
   KUBECONFORM_VERSION: v0.7.0
+  PROMETHEUS_VERSION: "3.15.0"
 
 jobs:
-  go:
+  go-test:
     name: Go tests
     runs-on: ubuntu-latest
     defaults:
@@ -27,22 +34,73 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version-file: src/go.mod
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
           cache-dependency-path: src/go.sum
-      - name: Check formatting
+      - name: Test
+        run: |
+          set -o pipefail
+          go test -race -covermode=atomic -coverprofile=coverage.out ./... | tee test.log
+      - name: Coverage summary
+        run: |
+          {
+            echo "### Go test coverage"
+            echo
+            echo "| Package | Coverage |"
+            echo "|---------|----------|"
+            awk '/coverage:/ {
+              pkg = ($1 == "ok") ? $2 : $1
+              for (i = 1; i < NF; i++) if ($i == "coverage:") cov = $(i + 1)
+              sub("^github.com/rayderua/prometheus-serverscom-exporter/src/", "", pkg)
+              print "| " pkg " | " cov " |"
+            }' test.log
+            echo "| **total** | **$(go tool cover -func=coverage.out | awk '/^total:/ {print $NF}')** |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: src/coverage.out
+
+  go-lint:
+    name: Go lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache-dependency-path: src/go.sum
+      - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go vet ./...
-      - run: go test -race ./...
+      - name: go vet
+        run: go vet ./...
+      # Built with the project's Go version: a prebuilt binary made with an
+      # older Go cannot analyze code that requires a newer one.
+      - name: golangci-lint
+        run: go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" run ./...
+      - name: govulncheck
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
 
   image:
     name: Docker image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache-dependency-path: src/go.sum
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      # Build only, to catch Dockerfile errors; images are pushed by the release workflow.
-      - uses: docker/build-push-action@v6
+      # Build all platforms to catch Dockerfile errors; images are pushed by
+      # the release workflow.
+      - name: Build linux/amd64 and linux/arm64
+        uses: docker/build-push-action@v6
         with:
           context: src
           platforms: linux/amd64,linux/arm64
@@ -53,44 +111,67 @@ jobs:
             BRANCH=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Load linux/amd64 for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: src
+          platforms: linux/amd64
+          load: true
+          tags: prometheus-serverscom-exporter:smoke
+          build-args: |
+            VERSION=${{ github.sha }}
+            REVISION=${{ github.sha }}
+            BRANCH=${{ github.ref_name }}
+          cache-from: type=gha
+      - name: Smoke test against the mock API
+        working-directory: src
+        run: test/smoke.sh prometheus-serverscom-exporter:smoke
 
   chart:
     name: Helm chart
     runs-on: ubuntu-latest
+    env:
+      CHART_DIR: charts/serverscom-exporter
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # tags for the version check
       - name: Chart version must be bumped
         run: |
-          chart_dir=charts/serverscom-exporter
-          version=$(sed -n 's/^version:[[:space:]]*//p' "$chart_dir/Chart.yaml" | tr -d "\"'")
+          version=$(sed -n 's/^version:[[:space:]]*//p' "$CHART_DIR/Chart.yaml" | tr -d "\"'")
           if git rev-parse -q --verify "refs/tags/chart-${version}" > /dev/null \
-             && ! git diff --quiet "chart-${version}" HEAD -- "$chart_dir"; then
-            echo "::error file=$chart_dir/Chart.yaml::Chart changed since chart-${version} was released; bump version in Chart.yaml"
+             && ! git diff --quiet "chart-${version}" HEAD -- "$CHART_DIR"; then
+            echo "::error file=$CHART_DIR/Chart.yaml::Chart changed since chart-${version} was released; bump version in Chart.yaml"
             exit 1
           fi
           if last=$(git describe --tags --match 'chart-[0-9]*' --abbrev=0 HEAD 2>/dev/null); then
             newest=$(printf '%s\n%s\n' "${last#chart-}" "$version" | sort -V | tail -1)
             if [[ "$newest" != "$version" ]]; then
-              echo "::error file=$chart_dir/Chart.yaml::Chart version ${version} is lower than the last release ${last#chart-}"
+              echo "::error file=$CHART_DIR/Chart.yaml::Chart version ${version} is lower than the last release ${last#chart-}"
               exit 1
             fi
           fi
       - uses: azure/setup-helm@v4
         with:
           version: ${{ env.HELM_VERSION }}
-      - name: Install kubeconform
+      - name: Install tools
         run: |
+          # Helm 4 verifies plugin signatures; helm-unittest is installed from git.
+          helm plugin install https://github.com/helm-unittest/helm-unittest \
+            --version "$HELM_UNITTEST_VERSION" --verify=false
           curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin kubeconform
+            | sudo tar -xz -C /usr/local/bin kubeconform
+          curl -sSfL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
       - name: Lint
         run: |
-          helm lint --strict charts/serverscom-exporter --set apiToken.value=ci
-          helm lint --strict charts/serverscom-exporter --set apiToken.existingSecret=ci,persistence.enabled=false
+          helm lint --strict "$CHART_DIR" --set apiToken.value=ci
+          helm lint --strict "$CHART_DIR" --set apiToken.existingSecret=ci,persistence.enabled=false
+      - name: Unit tests
+        run: helm unittest "$CHART_DIR"
       - name: Validate manifests
         run: |
-          helm template ci charts/serverscom-exporter \
+          helm template ci "$CHART_DIR" \
             --set apiToken.value=ci \
             --set serviceMonitor.enabled=true \
             --set prometheusRule.enabled=true \
@@ -99,3 +180,22 @@ jobs:
           | kubeconform -strict -summary \
               -schema-location default \
               -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+      - name: Check PrometheusRule expressions
+        run: |
+          helm template ci "$CHART_DIR" --set apiToken.value=ci --set prometheusRule.enabled=true \
+            --show-only templates/prometheusrule.yaml | yq '.spec' > "$RUNNER_TEMP/chart.rules.yml"
+          promtool check rules "$RUNNER_TEMP/chart.rules.yml"
+
+  alerts:
+    name: Alert rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install promtool
+        run: |
+          curl -sSfL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+      - name: Check rules
+        run: promtool check rules grafana/alerts/serverscom.rules.yml
+      - name: Unit tests
+        run: promtool test rules grafana/alerts/tests/*.test.yml

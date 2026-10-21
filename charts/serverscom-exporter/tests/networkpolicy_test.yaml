@@ -1,0 +1,35 @@
+suite: networkpolicy
+templates:
+  - networkpolicy.yaml
+set:
+  apiToken.value: test
+tests:
+  - it: is disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: restricts ingress only by default
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress]
+      - notExists:
+          path: spec.egress
+
+  - it: allows DNS and HTTPS egress when restricted
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.restrictEgress: true
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress, Egress]
+      - lengthEqual:
+          path: spec.egress
+          count: 2
+      - equal:
+          path: spec.egress[1].ports[0].port
+          value: 443

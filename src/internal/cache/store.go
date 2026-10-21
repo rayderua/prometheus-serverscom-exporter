@@ -152,10 +152,10 @@ func writeFileAtomic(path string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("create temp cache file: %w", err)
 	}
-	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after a successful rename
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write cache file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

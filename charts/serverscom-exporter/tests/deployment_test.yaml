@@ -1,0 +1,232 @@
+suite: deployment
+templates:
+  - deployment.yaml
+set:
+  apiToken.value: test
+tests:
+  - it: runs a single replica with the Recreate strategy
+    set:
+      # not a value of the chart; must not change anything
+      replicaCount: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: passes the token file, listen address and cache file
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --api.token-file=/etc/serverscom-exporter/token/token
+            - --web.listen-address=:9920
+            - --cache.file=/data/cache.json
+            - --web.telemetry-path=/metrics
+
+  - it: turns config values into flags and skips empty ones
+    set:
+      config:
+        requestsPerHour: 1200
+        ratelimitReserve: 0
+        refresh:
+          featuresInterval: "0"
+          hostsInterval: 5m
+        hostLabels: env,team
+        logFormat: json
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --api.requests-per-hour=1200
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --api.ratelimit-reserve=0
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --refresh.features-interval=0
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --refresh.hosts-interval=5m
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --collector.host-labels=env,team
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --log.format=json
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --refresh.l2-interval=
+      - lengthEqual:
+          path: spec.template.spec.containers[0].args
+          count: 10
+
+  - it: appends extraArgs
+    set:
+      extraArgs: ["--api.timeout=1m"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --api.timeout=1m
+
+  - it: uses appVersion as the image tag by default
+    chart:
+      appVersion: 1.4.0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rayderua/prometheus-serverscom-exporter:1.4.0
+
+  - it: prefers the digest over the tag
+    set:
+      image.tag: 1.0.0
+      image.digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rayderua/prometheus-serverscom-exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+  - it: mounts the chart-created token Secret and restarts on token changes
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: token
+            secret:
+              secretName: RELEASE-NAME-serverscom-exporter-token
+              items:
+                - key: token
+                  path: token
+      - exists:
+          path: spec.template.metadata.annotations["checksum/token"]
+
+  - it: mounts an existing token Secret with a custom key
+    set:
+      apiToken.value: ""
+      apiToken.existingSecret: my-token
+      apiToken.secretKey: api-token
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: token
+            secret:
+              secretName: my-token
+              items:
+                - key: api-token
+                  path: api-token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --api.token-file=/etc/serverscom-exporter/token/api-token
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/token"]
+
+  - it: keeps the cache on the chart PVC by default
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: RELEASE-NAME-serverscom-exporter
+
+  - it: uses an existing claim
+    set:
+      persistence.existingClaim: my-claim
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: my-claim
+
+  - it: uses an emptyDir without persistence
+    set:
+      persistence.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}
+
+  - it: runs as non-root with a read-only root filesystem
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 65532
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: probes /-/healthy over HTTP by default
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value:
+            path: /-/healthy
+            port: http
+            scheme: HTTP
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /-/healthy
+
+  - it: supports tcpSocket probes
+    set:
+      probes.type: tcpSocket
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.tcpSocket.port
+          value: http
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+      - notExists:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+
+  - it: listens on the service port
+    set:
+      service.port: 8080
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --web.listen-address=:8080
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8080
+
+  - it: mounts the web config and TLS secrets
+    set:
+      webConfig:
+        enabled: true
+        config:
+          basic_auth_users:
+            prometheus: hash
+        tlsSecrets:
+          - name: exporter-tls
+            mountPath: /etc/serverscom-exporter/tls
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --web.config.file=/etc/serverscom-exporter/web/web-config.yml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls-exporter-tls
+            secret:
+              secretName: exporter-tls
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tls-exporter-tls
+            mountPath: /etc/serverscom-exporter/tls
+            readOnly: true
+      - exists:
+          path: spec.template.metadata.annotations["checksum/web-config"]

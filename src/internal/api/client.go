@@ -219,7 +219,7 @@ func (c *Client) do(ctx context.Context, endpoint, rawURL string, out any) (stri
 		c.metrics.requests.WithLabelValues(endpoint, "error").Inc()
 		return "", fmt.Errorf("%s: %w", endpoint, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	c.metrics.requests.WithLabelValues(endpoint, strconv.Itoa(resp.StatusCode)).Inc()
 	c.updateRateLimit(resp.Header)

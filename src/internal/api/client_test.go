@@ -45,9 +45,9 @@ func TestListFollowsPaginationAndSendsToken(t *testing.T) {
 		switch r.URL.Query().Get("page") {
 		case "":
 			w.Header().Set("Link", fmt.Sprintf(`<%s/v1/racks?page=2&per_page=2>; rel="next", <%s/v1/racks?page=2&per_page=2>; rel="last"`, serverURL, serverURL))
-			fmt.Fprint(w, `[{"id":"r1","name":"rack-1"},{"id":"r2","name":"rack-2"}]`)
+			_, _ = fmt.Fprint(w, `[{"id":"r1","name":"rack-1"},{"id":"r2","name":"rack-2"}]`)
 		case "2":
-			fmt.Fprint(w, `[{"id":"r3","name":"rack-3"}]`)
+			_, _ = fmt.Fprint(w, `[{"id":"r3","name":"rack-3"}]`)
 		default:
 			t.Errorf("unexpected page %q", r.URL.Query().Get("page"))
 		}
@@ -68,7 +68,7 @@ func TestPaginationIgnoresForeignHosts(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.Header().Set("Link", `<https://evil.example.com/v1/racks?page=2>; rel="next"`)
-		fmt.Fprint(w, `[]`)
+		_, _ = fmt.Fprint(w, `[]`)
 	})
 
 	if _, err := client.ListRacks(context.Background()); err != nil {
@@ -85,7 +85,7 @@ func TestRateLimitHeadersAndMetrics(t *testing.T) {
 		w.Header().Set("X-RateLimit-Limit", "2000")
 		w.Header().Set("X-RateLimit-Remaining", "1500")
 		w.Header().Set("X-RateLimit-Reset", fmt.Sprint(reset))
-		fmt.Fprint(w, `[]`)
+		_, _ = fmt.Fprint(w, `[]`)
 	})
 
 	if _, err := client.ListLocations(context.Background()); err != nil {
@@ -120,7 +120,7 @@ serverscom_api_requests_budget_per_hour 1e+06
 
 func TestReservePausesRequests(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `[]`)
+		_, _ = fmt.Fprint(w, `[]`)
 	})
 	client.rateLimit = RateLimit{Limit: 2000, Remaining: 5, Reset: time.Now().Add(time.Hour)}
 

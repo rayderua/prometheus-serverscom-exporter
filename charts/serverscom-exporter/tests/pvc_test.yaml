@@ -1,0 +1,48 @@
+suite: persistence
+templates:
+  - pvc.yaml
+set:
+  apiToken.value: test
+tests:
+  - it: creates a PVC that survives uninstall
+    asserts:
+      - isKind:
+          of: PersistentVolumeClaim
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: spec.resources.requests.storage
+          value: 100Mi
+      - notExists:
+          path: spec.storageClassName
+
+  - it: sets the storage class
+    set:
+      persistence.storageClass: fast
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast
+
+  - it: disables dynamic provisioning with "-"
+    set:
+      persistence.storageClass: "-"
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: ""
+
+  - it: creates nothing for an existing claim
+    set:
+      persistence.existingClaim: my-claim
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates nothing without persistence
+    set:
+      persistence.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

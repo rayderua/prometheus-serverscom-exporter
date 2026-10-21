@@ -19,6 +19,15 @@ helm install serverscom-exporter oci://ghcr.io/rayderua/charts/serverscom-export
   --set prometheusRule.enabled=true
 ```
 
+Or from the Helm repository on GitHub Pages:
+
+```sh
+helm repo add serverscom https://rayderua.github.io/prometheus-serverscom-exporter
+helm repo update
+helm install serverscom-exporter serverscom/serverscom-exporter -n monitoring \
+  --set apiToken.existingSecret=serverscom-api-token
+```
+
 From a checkout, use `charts/serverscom-exporter` instead of the OCI reference.
 The chart is versioned independently of the exporter. The image tag defaults
 to the chart's `appVersion`
@@ -113,6 +122,17 @@ With TLS only, keep `httpGet` probes and set `probes.scheme: HTTPS`.
 The expressions select the target by the `namespace` and `service` labels that
 the ServiceMonitor adds. Disable single alerts with
 `prometheusRule.alerts.<name>: false`, add your own with `prometheusRule.rules`.
+
+## Tests
+
+```sh
+helm lint --strict charts/serverscom-exporter --set apiToken.value=test
+helm unittest charts/serverscom-exporter
+```
+
+Unit tests are in [`tests/`](tests) (excluded from the package). CI also
+validates the rendered manifests with kubeconform and the alert expressions
+with `promtool check rules`.
 
 ## Grafana dashboard
 
