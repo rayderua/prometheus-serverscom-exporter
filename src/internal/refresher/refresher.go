@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,12 @@ type Config struct {
 	// server whose updated_at changed are refreshed on the next check, which
 	// runs every HostsInterval.
 	DetailsInterval time.Duration
+
+	// FeaturesInterval is how often server features are re-fetched for all
+	// servers with details. Toggling a feature (e.g. disaggregated_*_ports
+	// or oob_public_access) does not change updated_at, so without this loop
+	// such changes would only show up after DetailsInterval. Zero disables it.
+	FeaturesInterval time.Duration
 
 	// L2Interval is how often L2 segments are fetched.
 	L2Interval time.Duration
@@ -90,15 +97,14 @@ func New(client API, store *cache.Store, cfg Config, logger *slog.Logger, reg pr
 
 // Run starts all loops and blocks until ctx is cancelled.
 func (r *Refresher) Run(ctx context.Context) {
-	loops := []struct {
-		resource cache.Resource
-		interval time.Duration
-		refresh  func(context.Context) error
-	}{
+	loops := []refreshLoop{
 		{cache.ResourceHosts, r.cfg.HostsInterval, r.refreshHosts},
 		{cache.ResourceHostDetails, r.cfg.HostsInterval, r.refreshDetails},
 		{cache.ResourceL2Segments, r.cfg.L2Interval, r.refreshL2Segments},
 		{cache.ResourceLocations, r.cfg.ReferenceInterval, r.refreshReference},
+	}
+	if r.cfg.FeaturesInterval > 0 {
+		loops = append(loops, refreshLoop{cache.ResourceFeatures, r.cfg.FeaturesInterval, r.refreshFeatures})
 	}
 
 	snapshot := r.store.Snapshot()
@@ -111,6 +117,7 @@ func (r *Refresher) Run(ctx context.Context) {
 	r.logger.Info("Refresher started",
 		"cached_hosts", len(snapshot.Hosts), "cached_host_details", withDetails,
 		"hosts_interval", r.cfg.HostsInterval, "details_interval", r.cfg.DetailsInterval,
+		"features_interval", r.cfg.FeaturesInterval,
 		"l2_interval", r.cfg.L2Interval, "reference_interval", r.cfg.ReferenceInterval)
 
 	// On a cold start (no cache file) fetch racks first: host metrics carry the
@@ -133,15 +140,23 @@ func (r *Refresher) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, loop := range loops {
 		wg.Go(func() {
-			r.loop(ctx, loop.resource, loop.interval, loop.refresh)
+			r.loop(ctx, loop)
 		})
 	}
 	wg.Wait()
 }
 
+// refreshLoop is one periodically refreshed group of data.
+type refreshLoop struct {
+	resource cache.Resource
+	interval time.Duration
+	refresh  func(context.Context) error
+}
+
 // loop calls refresh every interval. The first run is delayed if the
 // resource was refreshed recently, e.g. according to a loaded cache file.
-func (r *Refresher) loop(ctx context.Context, resource cache.Resource, interval time.Duration, refresh func(context.Context) error) {
+func (r *Refresher) loop(ctx context.Context, l refreshLoop) {
+	resource, interval, refresh := l.resource, l.interval, l.refresh
 	delay := time.Until(r.store.Snapshot().LastSuccess[resource].Add(interval))
 
 	for {
@@ -407,6 +422,103 @@ func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 		return errPartialDetails
 	}
 	return nil
+}
+
+// refreshFeatures re-fetches features of every server whose details are
+// cached. Servers without details are skipped: the details loop fetches their
+// features together with everything else.
+func (r *Refresher) refreshFeatures(ctx context.Context) error {
+	type target struct{ id, title string }
+	var targets []target
+	for id, host := range r.store.Snapshot().Hosts {
+		if host.Details != nil {
+			targets = append(targets, target{id, host.Server.Title})
+		}
+	}
+	if len(targets) == 0 {
+		r.logger.Debug("No hosts with details yet, skipping features refresh")
+		return nil
+	}
+	slices.SortFunc(targets, func(a, b target) int { return strings.Compare(a.title, b.title) })
+
+	r.logger.Info("Refreshing host features", "hosts", len(targets))
+	start := time.Now()
+	logEvery := max(1, len(targets)/10) // about ten progress lines per run
+	var changed, failed int
+
+	for i, t := range targets {
+		features, err := r.api.ListFeatures(ctx, t.id)
+		switch {
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case err == nil:
+			if r.storeFeatures(t.id, t.title, features) {
+				changed++
+			}
+		case api.IsNotFound(err):
+			r.logger.Info("Host disappeared during features refresh", "host_id", t.id, "title", t.title)
+		case api.IsRateLimited(err):
+			r.logger.Warn("Features refresh interrupted by the API rate limit, resuming on the next run",
+				"processed", i, "remaining", len(targets)-i)
+			return err
+		default:
+			failed++
+			r.logger.Warn("Cannot fetch host features, keeping cached data", "host_id", t.id, "title", t.title, "err", err)
+		}
+
+		processed := i + 1
+		if remaining := len(targets) - processed; remaining > 0 && processed%logEvery == 0 {
+			perHost := time.Since(start) / time.Duration(processed)
+			r.logger.Info("Host features progress", "progress", fmt.Sprintf("%d/%d", processed, len(targets)),
+				"remaining", remaining, "eta", (perHost * time.Duration(remaining)).Round(time.Second))
+		}
+	}
+
+	r.logger.Info("Host features refresh finished", "hosts", len(targets), "changed", changed,
+		"failed", failed, "duration", time.Since(start).Round(time.Second))
+	if failed > 0 {
+		return errors.New("some host features could not be refreshed")
+	}
+	r.markSuccess(cache.ResourceFeatures)
+	return nil
+}
+
+// storeFeatures replaces the cached features of a host, logs every change and
+// reports whether anything changed.
+func (r *Refresher) storeFeatures(id, title string, features []api.Feature) bool {
+	changed := false
+	r.store.Update(func(s *cache.Snapshot) {
+		host, ok := s.Hosts[id]
+		if !ok || host.Details == nil {
+			return // removed or not loaded by a concurrent refresh
+		}
+
+		old := map[string]string{}
+		for _, f := range host.Details.Features {
+			old[f.Name] = f.Status
+		}
+		for _, f := range features {
+			if previous, known := old[f.Name]; !known || previous != f.Status {
+				changed = true
+				r.logger.Info("Host feature changed", "host_id", id, "title", title,
+					"feature", f.Name, "from", previous, "to", f.Status)
+			}
+			delete(old, f.Name)
+		}
+		for name, previous := range old {
+			changed = true
+			r.logger.Info("Host feature removed", "host_id", id, "title", title, "feature", name, "was", previous)
+		}
+		if !changed {
+			return
+		}
+
+		// Copy-on-write: published values must not be modified.
+		details := *host.Details
+		details.Features = features
+		s.Hosts[id] = &cache.Host{Server: host.Server, Details: &details}
+	})
+	return changed
 }
 
 // refreshL2Segments replaces all L2 data. Partial results are discarded so

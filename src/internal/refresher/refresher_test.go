@@ -22,6 +22,9 @@ type fakeAPI struct {
 
 	// failPowerFeeds makes ListPowerFeeds return an API error.
 	failPowerFeeds bool
+
+	// features is returned by ListFeatures for every server.
+	features []api.Feature
 }
 
 func (f *fakeAPI) count(name string) {
@@ -66,7 +69,12 @@ func (f *fakeAPI) ListConnections(context.Context, string) ([]api.Connection, er
 
 func (f *fakeAPI) ListNetworks(context.Context, string) ([]api.Network, error) { return nil, nil }
 
-func (f *fakeAPI) ListFeatures(context.Context, string) ([]api.Feature, error) { return nil, nil }
+func (f *fakeAPI) ListFeatures(context.Context, string) ([]api.Feature, error) {
+	f.count("ListFeatures")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.features, nil
+}
 
 func (f *fakeAPI) ListPowerFeeds(context.Context, string) ([]api.PowerFeed, error) {
 	f.mu.Lock()
@@ -102,7 +110,7 @@ func (f *fakeAPI) ListUplinkModels(context.Context, int64, int64) ([]api.UplinkM
 
 func newTestRefresher(fake *fakeAPI) *Refresher {
 	store := cache.NewStore("", slog.New(slog.DiscardHandler))
-	cfg := Config{HostsInterval: time.Minute, DetailsInterval: time.Hour, L2Interval: time.Minute, ReferenceInterval: time.Hour}
+	cfg := Config{HostsInterval: time.Minute, DetailsInterval: time.Hour, FeaturesInterval: time.Minute, L2Interval: time.Minute, ReferenceInterval: time.Hour}
 	return New(fake, store, cfg, slog.New(slog.DiscardHandler), prometheus.NewRegistry())
 }
 
@@ -215,6 +223,60 @@ func TestFailedSubResourceKeepsTheRest(t *testing.T) {
 	}
 	if len(details.PowerFeeds) != 1 {
 		t.Fatalf("previous power feeds not kept: %+v", details.PowerFeeds)
+	}
+}
+
+func TestFeaturesRefreshPicksUpChangesWithoutUpdatedAt(t *testing.T) {
+	updated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := &fakeAPI{
+		servers:  []api.DedicatedServer{{ID: "h1", UpdatedAt: updated}, {ID: "h2", UpdatedAt: updated}},
+		features: []api.Feature{{Name: "disaggregated_private_ports", Status: "deactivated"}},
+	}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+	driveSlotCalls := fake.callCount("ListDriveSlots")
+
+	// The feature is toggled; updated_at stays the same.
+	fake.mu.Lock()
+	fake.features = []api.Feature{{Name: "disaggregated_private_ports", Status: "activated"}}
+	fake.mu.Unlock()
+
+	mustRun(t, r.refreshHosts(ctx))
+	if due := r.hostsDueForDetails(time.Now()); len(due) != 0 {
+		t.Fatalf("details unexpectedly due: %+v", due)
+	}
+	mustRun(t, r.refreshFeatures(ctx))
+
+	for _, id := range []string{"h1", "h2"} {
+		features := r.store.Snapshot().Hosts[id].Details.Features
+		if len(features) != 1 || features[0].Status != "activated" {
+			t.Fatalf("%s features = %+v, want activated", id, features)
+		}
+	}
+	if got := fake.callCount("ListDriveSlots"); got != driveSlotCalls {
+		t.Fatalf("features refresh refetched drive slots: %d -> %d calls", driveSlotCalls, got)
+	}
+	if r.store.Snapshot().LastSuccess[cache.ResourceFeatures].IsZero() {
+		t.Fatal("features refresh success not recorded")
+	}
+}
+
+func TestFeaturesRefreshSkipsHostsWithoutDetails(t *testing.T) {
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1"}}}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshFeatures(ctx))
+
+	if got := fake.callCount("ListFeatures"); got != 0 {
+		t.Fatalf("ListFeatures calls = %d, want 0 for hosts without details", got)
+	}
+	if r.store.Snapshot().Hosts["h1"].Details != nil {
+		t.Fatal("features refresh created partial details")
 	}
 }
 

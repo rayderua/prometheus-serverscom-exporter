@@ -55,6 +55,8 @@ func main() {
 				Default("2m").Duration()
 		detailsInterval = kingpin.Flag("refresh.details-interval", "Maximum age of per-server details (drives, ports, networks, features, power feeds). Changed servers are refreshed earlier.").
 				Default("12h").Duration()
+		featuresInterval = kingpin.Flag("refresh.features-interval", "How often to re-fetch server features (port aggregation, OOB public access) for all servers. Toggling a feature does not change updated_at. Costs one request per server; 0 disables.").
+					Default("1h").Duration()
 		l2Interval = kingpin.Flag("refresh.l2-interval", "How often to fetch L2 segments with members and networks.").
 				Default("15m").Duration()
 		referenceInterval = kingpin.Flag("refresh.reference-interval", "How often to fetch locations, racks and uplink models.").
@@ -123,6 +125,7 @@ func main() {
 	ref := refresher.New(client, store, refresher.Config{
 		HostsInterval:     *hostsInterval,
 		DetailsInterval:   *detailsInterval,
+		FeaturesInterval:  *featuresInterval,
 		L2Interval:        *l2Interval,
 		ReferenceInterval: *referenceInterval,
 	}, logger.With("component", "refresher"), registry)

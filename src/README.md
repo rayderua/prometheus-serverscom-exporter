@@ -16,6 +16,7 @@ and `/metrics` only renders the current snapshot.
 |-----------|--------------------------------------------------------------|-----------------------------------------------|
 | hosts     | server list: statuses, power, labels, `updated_at`            | `--refresh.hosts-interval=2m`                 |
 | details   | drives, ports, networks, features, power feeds, configuration | `--refresh.details-interval=12h`, or as soon as `updated_at` changes |
+| features  | server features only (port aggregation, OOB public access)    | `--refresh.features-interval=1h`, one request per server |
 | l2        | L2 segments, members, networks                                | `--refresh.l2-interval=15m`                   |
 | reference | locations, racks, uplink model catalogues                     | `--refresh.reference-interval=24h`            |
 
@@ -82,8 +83,9 @@ label_values(serverscom_host_info{location=~"$location"}, rack)
 - The full set of feature `status` values. `feature_enabled` and `uplink_aggregated`
   assume an enabled feature reports `activated`.
 - Units of `ram_size` and drive `capacity` (most likely GB).
-- Whether `updated_at` changes when drives, ports or features change. If it
-  does not, lower `--refresh.details-interval`.
+- Whether `updated_at` changes when drives or ports change. If it does not,
+  lower `--refresh.details-interval`. (Toggling a feature, e.g. port
+  disaggregation, does **not** change it; the features loop covers that.)
 - The maximum `per_page` value.
 
 ## Development

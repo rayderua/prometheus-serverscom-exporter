@@ -20,6 +20,7 @@ type Resource string
 const (
 	ResourceHosts       Resource = "hosts"
 	ResourceHostDetails Resource = "host_details"
+	ResourceFeatures    Resource = "host_features"
 	ResourceL2Segments  Resource = "l2_segments"
 	ResourceLocations   Resource = "locations"
 	ResourceRacks       Resource = "racks"
