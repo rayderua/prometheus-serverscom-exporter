@@ -43,6 +43,7 @@ type API interface {
 	ListLocations(ctx context.Context) ([]api.Location, error)
 	ListRacks(ctx context.Context) ([]api.Rack, error)
 	ListUplinkModels(ctx context.Context, locationID, serverModelID int64) ([]api.UplinkModel, error)
+	RateLimit() api.RateLimit
 }
 
 // Config holds refresh intervals.
@@ -67,6 +68,12 @@ type Config struct {
 	// ReferenceInterval is how often locations, racks and uplink catalogues
 	// are fetched.
 	ReferenceInterval time.Duration
+
+	// The API client settings below are used to estimate the request demand
+	// of the configuration and to recommend a budget and intervals.
+	PageSize      int
+	BudgetPerHour int
+	Reserve       int
 }
 
 // Refresher runs the refresh loops.
@@ -77,6 +84,10 @@ type Refresher struct {
 	logger *slog.Logger
 
 	errors *prometheus.CounterVec
+	demand *demandMetrics
+
+	demandMu           sync.Mutex
+	lastRecommendation string // last logged recommendation, to log only changes
 }
 
 // New creates a Refresher and registers its metrics.
@@ -92,6 +103,9 @@ func New(client API, store *cache.Store, cfg Config, logger *slog.Logger, reg pr
 		}, []string{"resource"}),
 	}
 	reg.MustRegister(r.errors)
+	r.demand = newDemandMetrics(reg)
+	// Log the first estimate even when it has no recommendation.
+	r.lastRecommendation = "-"
 	return r
 }
 
@@ -230,6 +244,7 @@ func (r *Refresher) refreshHosts(ctx context.Context) error {
 	}
 	log("Hosts refreshed", "hosts", len(servers), "added", added, "removed", removed, "changed", changed,
 		"pending_details", len(r.hostsDueForDetails(time.Now())))
+	r.updateDemand()
 	return nil
 }
 
@@ -553,6 +568,7 @@ func (r *Refresher) refreshL2Segments(ctx context.Context) error {
 		members += len(segment.Members)
 	}
 	r.logger.Info("L2 segments refreshed", "segments", len(segments), "members", members)
+	r.updateDemand()
 	return nil
 }
 
@@ -581,6 +597,7 @@ func (r *Refresher) refreshReference(ctx context.Context) error {
 		s.LastSuccess[cache.ResourceRacks] = now
 	})
 	r.logger.Info("Reference data refreshed", "locations", len(locations), "racks", len(racks))
+	r.updateDemand()
 
 	return r.refreshStaleUplinkModels(ctx)
 }

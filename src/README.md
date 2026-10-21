@@ -20,9 +20,35 @@ and `/metrics` only renders the current snapshot.
 | l2        | L2 segments, members, networks                                | `--refresh.l2-interval=15m`                   |
 | reference | locations, racks, uplink model catalogues                     | `--refresh.reference-interval=24h`            |
 
-Requests are paced evenly within `--api.requests-per-hour`. When the
-account-wide `X-RateLimit-Remaining` drops to `--api.ratelimit-reserve`, the
-exporter pauses until the window resets. A 429 response pauses it as well.
+### Request limits
+
+Two limits apply, and the exporter never delays requests while both have room:
+
+- **Its own budget**, `--api.requests-per-hour` (default 600). Counted like
+  the API limit: a window opens with the first request and resets an hour
+  later. When the window is used up, the exporter logs a warning, sets
+  `serverscom_api_budget_exhausted` and waits for the reset.
+- **The account limit** (`X-RateLimit-*`). When `X-RateLimit-Remaining` drops
+  to `--api.ratelimit-reserve` (default 300), the exporter waits until the
+  account window resets, leaving the rest to Terraform, the CLI and others.
+  A 429 response pauses it as well.
+
+### Demand estimate and recommendations
+
+From the number of servers, segments and racks and the configured intervals,
+the exporter estimates how many requests per hour it needs and how many a full
+download costs (e.g. after a start without a cache file). It exposes the
+estimate as metrics and, whenever the recommendation changes, logs whether the
+configuration fits, with the flags to change if not:
+
+```
+level=WARN msg="API demand does not fit into the request budget; the exporter will wait for budget resets"
+  requests_per_hour=538 full_refresh_requests=243 budget_per_hour=500 ... recommended="--api.requests-per-hour=700"
+```
+
+The recommended budget is the estimate with 25% headroom, at least one full
+download, and at most the account limit minus the reserve. If even that is not
+enough, the recommended refresh intervals are raised proportionally.
 
 With `--cache.file` the cache is written to disk. After a restart the exporter
 serves full metrics immediately and only refetches what is due.
@@ -71,6 +97,12 @@ labels, so dashboards can filter by location and rack without joins.
 | `serverscom_api_requests_total`, `_request_duration_seconds` | Exporter API usage by endpoint |
 | `serverscom_api_ratelimit_limit`, `_remaining`, `_reset_timestamp_seconds` | Account-wide rate limit state |
 | `serverscom_api_ratelimit_reserve`, `serverscom_api_requests_budget_per_hour` | Configured reserve and request budget, for rate limit forecasts |
+| `serverscom_api_budget_used`, `_remaining`, `_reset_timestamp_seconds` | Exporter's own hourly budget window (`--api.requests-per-hour`) |
+| `serverscom_api_budget_exhausted` / `_exhausted_total` | 1 while the current budget window is used up / number of used up windows |
+| `serverscom_exporter_requests_per_hour_estimated` | Requests per hour the configuration needs, by `loop` |
+| `serverscom_exporter_full_refresh_requests_estimated` | Requests to download all information once |
+| `serverscom_exporter_refresh_interval_seconds` / `_recommended_seconds` | Configured / recommended refresh interval, by `loop` |
+| `serverscom_api_requests_per_hour_recommended` | Recommended `--api.requests-per-hour` |
 
 Grafana variables for location and rack:
 

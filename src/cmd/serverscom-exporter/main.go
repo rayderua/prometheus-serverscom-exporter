@@ -46,7 +46,7 @@ func main() {
 				Default("30s").Duration()
 		apiPageSize = kingpin.Flag("api.page-size", "Page size (per_page) for collection endpoints.").
 				Default("100").Int()
-		apiBudget = kingpin.Flag("api.requests-per-hour", "Maximum API requests per hour issued by this exporter. The account limit is 2000/h and is shared with other API users.").
+		apiBudget = kingpin.Flag("api.requests-per-hour", "Hourly request budget of this exporter. Requests are not delayed until it is used up; then the exporter waits for the hourly reset. The account limit is 2000/h and is shared with other API users.").
 				Default("600").Int()
 		apiReserve = kingpin.Flag("api.ratelimit-reserve", "Pause when the account-wide X-RateLimit-Remaining drops to this value, leaving the rest to other API users.").
 				Default("300").Int()
@@ -114,7 +114,6 @@ func main() {
 
 	logger.Info("Configuration",
 		"api_url", *apiURL, "requests_per_hour", *apiBudget,
-		"request_interval", (time.Hour / time.Duration(max(*apiBudget, 1))).Round(time.Millisecond),
 		"ratelimit_reserve", *apiReserve, "cache_file", *cacheFile)
 
 	store := cache.NewStore(*cacheFile, logger.With("component", "cache"))
@@ -128,6 +127,9 @@ func main() {
 		FeaturesInterval:  *featuresInterval,
 		L2Interval:        *l2Interval,
 		ReferenceInterval: *referenceInterval,
+		PageSize:          *apiPageSize,
+		BudgetPerHour:     *apiBudget,
+		Reserve:           *apiReserve,
 	}, logger.With("component", "refresher"), registry)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

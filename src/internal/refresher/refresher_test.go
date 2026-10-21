@@ -108,6 +108,8 @@ func (f *fakeAPI) ListUplinkModels(context.Context, int64, int64) ([]api.UplinkM
 	return []api.UplinkModel{{ID: 1, Redundancy: true}}, nil
 }
 
+func (f *fakeAPI) RateLimit() api.RateLimit { return api.RateLimit{} }
+
 func newTestRefresher(fake *fakeAPI) *Refresher {
 	store := cache.NewStore("", slog.New(slog.DiscardHandler))
 	cfg := Config{HostsInterval: time.Minute, DetailsInterval: time.Hour, FeaturesInterval: time.Minute, L2Interval: time.Minute, ReferenceInterval: time.Hour}

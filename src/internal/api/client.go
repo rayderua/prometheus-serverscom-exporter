@@ -3,8 +3,8 @@
 // It deliberately implements only what the exporter needs:
 //   - bearer-token authentication;
 //   - Link-header pagination;
-//   - client-side pacing so the exporter never spends more than its own
-//     request budget;
+//   - the exporter's own hourly request budget: requests are sent without
+//     delay until the budget is used up, then the client waits for its reset;
 //   - tracking of the account-wide X-RateLimit-* headers, pausing when the
 //     account gets close to its limit (the limit is shared with Terraform,
 //     CLI and anything else using the same account).
@@ -45,8 +45,9 @@ type Options struct {
 	// PageSize is sent as per_page for collection endpoints.
 	PageSize int
 
-	// BudgetPerHour is the maximum number of requests per hour this exporter
-	// may issue. Requests are spread evenly instead of being sent in bursts.
+	// BudgetPerHour is the maximum number of requests per hourly window this
+	// exporter may issue. Requests are not delayed while the window has room;
+	// once it is used up, the client waits until the window resets.
 	BudgetPerHour int
 
 	// Reserve is the number of account-wide requests left untouched for other
@@ -66,7 +67,7 @@ type Client struct {
 	pageSize   int
 	reserve    int
 	httpClient *http.Client
-	pacer      *pacer
+	budget     *budget
 	logger     *slog.Logger
 	metrics    *clientMetrics
 
@@ -107,17 +108,24 @@ func NewClient(opts Options) (*Client, error) {
 		opts.Registerer = prometheus.NewRegistry()
 	}
 
-	return &Client{
+	c := &Client{
 		baseURL:    base,
 		token:      opts.Token,
 		userAgent:  opts.UserAgent,
 		pageSize:   opts.PageSize,
 		reserve:    opts.Reserve,
 		httpClient: &http.Client{Timeout: opts.Timeout},
-		pacer:      newPacer(time.Hour / time.Duration(opts.BudgetPerHour)),
+		budget:     newBudget(opts.BudgetPerHour, time.Hour),
 		logger:     opts.Logger,
 		metrics:    newClientMetrics(opts.Registerer, opts.BudgetPerHour, opts.Reserve),
-	}, nil
+	}
+	c.registerBudgetMetrics(opts.Registerer)
+	return c, nil
+}
+
+// BudgetPerHour returns the exporter's hourly request budget.
+func (c *Client) BudgetPerHour() int {
+	return c.budget.limit
 }
 
 // RateLimit returns the last account-wide rate limit state seen in responses.
@@ -216,7 +224,8 @@ func (c *Client) do(ctx context.Context, endpoint, rawURL string, out any) (stri
 	c.metrics.requests.WithLabelValues(endpoint, strconv.Itoa(resp.StatusCode)).Inc()
 	c.updateRateLimit(resp.Header)
 	c.logger.Debug("API request", "endpoint", endpoint, "status", resp.StatusCode,
-		"duration", time.Since(start).Round(time.Millisecond), "ratelimit_remaining", c.RateLimit().Remaining)
+		"duration", time.Since(start).Round(time.Millisecond), "ratelimit_remaining", c.RateLimit().Remaining,
+		"budget_remaining", c.budget.state(time.Now()).Remaining)
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
@@ -235,7 +244,13 @@ func (c *Client) do(ctx context.Context, endpoint, rawURL string, out any) (stri
 // waitForTurn blocks until the request fits into both the exporter's own
 // budget and the account-wide rate limit reserve.
 func (c *Client) waitForTurn(ctx context.Context) error {
-	if err := c.pacer.wait(ctx); err != nil {
+	err := c.budget.wait(ctx, func(s budgetState) {
+		c.metrics.budgetExhausted.Inc()
+		c.logger.Warn("Exporter request budget is used up, waiting for the hourly reset",
+			"budget_per_hour", c.budget.limit, "used", s.Used, "reset_at", s.Reset.Format(time.RFC3339),
+			"resume_in", time.Until(s.Reset).Round(time.Second))
+	})
+	if err != nil {
 		return err
 	}
 
@@ -318,31 +333,6 @@ func (c *Client) nextPageURL(h http.Header) string {
 	return ""
 }
 
-// pacer spaces requests evenly: each caller reserves the next free slot.
-type pacer struct {
-	interval time.Duration
-
-	mu   sync.Mutex
-	next time.Time
-}
-
-func newPacer(interval time.Duration) *pacer {
-	return &pacer{interval: interval}
-}
-
-func (p *pacer) wait(ctx context.Context) error {
-	p.mu.Lock()
-	now := time.Now()
-	slot := p.next
-	if slot.Before(now) {
-		slot = now
-	}
-	p.next = slot.Add(p.interval)
-	p.mu.Unlock()
-
-	return sleep(ctx, time.Until(slot))
-}
-
 // sleep waits for d or until ctx is done.
 func sleep(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
@@ -358,8 +348,44 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// registerBudgetMetrics exposes the state of the exporter's own budget,
+// mirroring the serverscom_api_ratelimit_* metrics of the account limit.
+func (c *Client) registerBudgetMetrics(reg prometheus.Registerer) {
+	state := func() budgetState { return c.budget.state(time.Now()) }
+	reg.MustRegister(
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "serverscom_api_budget_used",
+			Help: "Requests the exporter sent in the current hourly budget window.",
+		}, func() float64 { return float64(state().Used) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "serverscom_api_budget_remaining",
+			Help: "Requests left in the current hourly budget window of the exporter (--api.requests-per-hour).",
+		}, func() float64 { return float64(state().Remaining) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "serverscom_api_budget_reset_timestamp_seconds",
+			Help: "Unix time when the exporter's current budget window resets; 0 when no window is open.",
+		}, func() float64 {
+			if reset := state().Reset; !reset.IsZero() {
+				return float64(reset.Unix())
+			}
+			return 0
+		}),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "serverscom_api_budget_exhausted",
+			Help: "1 if the exporter used up its budget in the current window and waits (or waited) for the reset.",
+		}, func() float64 {
+			if state().Exhausted {
+				return 1
+			}
+			return 0
+		}),
+	)
+}
+
 // clientMetrics describes the exporter's own API usage.
 type clientMetrics struct {
+	budgetExhausted prometheus.Counter
+
 	requests      *prometheus.CounterVec
 	duration      *prometheus.HistogramVec
 	rateLimit     prometheus.Gauge
@@ -405,6 +431,11 @@ func newClientMetrics(reg prometheus.Registerer, budgetPerHour, reserve int) *cl
 	})
 	reserveGauge.Set(float64(reserve))
 
-	reg.MustRegister(m.requests, m.duration, m.rateLimit, m.rateRemaining, m.rateReset, budget, reserveGauge)
+	m.budgetExhausted = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "serverscom_api_budget_exhausted_total",
+		Help: "How many hourly budget windows the exporter used up before they reset.",
+	})
+
+	reg.MustRegister(m.requests, m.duration, m.rateLimit, m.rateRemaining, m.rateReset, budget, reserveGauge, m.budgetExhausted)
 	return m
 }

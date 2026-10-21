@@ -153,16 +153,3 @@ func TestErrorClassification(t *testing.T) {
 		t.Fatalf("expected a pause after 429, got %+v", rl)
 	}
 }
-
-func TestPacerSpacesRequests(t *testing.T) {
-	p := newPacer(20 * time.Millisecond)
-	start := time.Now()
-	for range 3 {
-		if err := p.wait(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if elapsed := time.Since(start); elapsed < 40*time.Millisecond {
-		t.Fatalf("3 requests took %v, want >= 40ms", elapsed)
-	}
-}

@@ -684,7 +684,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "((max(serverscom_api_ratelimit_remaining) - (max(serverscom_api_ratelimit_reserve) or vector(0))) - (clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour)) / 3600) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0))) >= bool 0",
+                        "expr": "((max(serverscom_api_ratelimit_remaining) - (max(serverscom_api_ratelimit_reserve) or vector(0))) - (clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour) / 3600)) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0))) >= bool 0",
                         "instant": true,
                         "range": false
                       }
@@ -782,7 +782,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "((max(serverscom_api_ratelimit_remaining) - (max(serverscom_api_ratelimit_reserve) or vector(0))) - (clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour)) / 3600) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0)))",
+                        "expr": "((max(serverscom_api_ratelimit_remaining) - (max(serverscom_api_ratelimit_reserve) or vector(0))) - (clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour) / 3600)) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0)))",
                         "instant": true,
                         "range": false
                       }
@@ -868,7 +868,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "(clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour)) / 3600) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0))",
+                        "expr": "(clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour) / 3600)) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0))",
                         "instant": true,
                         "range": false
                       }
@@ -1078,10 +1078,428 @@
           }
         }
       },
-      "pie_power": {
+      "stat_budget_state": {
         "kind": "Panel",
         "spec": {
           "id": 12,
+          "title": "Exporter request budget",
+          "description": "Whether the exporter used up its own --api.requests-per-hour budget in the current hourly window and waits for the reset.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_api_budget_exhausted)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "green"
+                      },
+                      {
+                        "value": 1,
+                        "color": "red"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "mappings": [
+                    {
+                      "type": "value",
+                      "options": {
+                        "0": {
+                          "text": "ok",
+                          "color": "green",
+                          "index": 0
+                        },
+                        "1": {
+                          "text": "used up, waiting for reset",
+                          "color": "red",
+                          "index": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_demand_ratio": {
+        "kind": "Panel",
+        "spec": {
+          "id": 13,
+          "title": "Demand / budget",
+          "description": "Requests per hour the configured refresh intervals need for the current number of servers, segments and racks (serverscom_exporter_requests_per_hour_estimated). Above the budget the exporter uses up --api.requests-per-hour and waits for the hourly reset; the log then recommends flags.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "sum(serverscom_exporter_requests_per_hour_estimated) / max(serverscom_api_requests_budget_per_hour)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percentunit",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "green"
+                      },
+                      {
+                        "value": 0.8,
+                        "color": "orange"
+                      },
+                      {
+                        "value": 1,
+                        "color": "red"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_demand": {
+        "kind": "Panel",
+        "spec": {
+          "id": 14,
+          "title": "Estimated demand per hour",
+          "description": "Requests per hour the configured refresh intervals need for the current number of servers, segments and racks (serverscom_exporter_requests_per_hour_estimated). Above the budget the exporter uses up --api.requests-per-hour and waits for the hourly reset; the log then recommends flags.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "sum(serverscom_exporter_requests_per_hour_estimated)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_budget_recommended": {
+        "kind": "Panel",
+        "spec": {
+          "id": 15,
+          "title": "Recommended budget per hour",
+          "description": "Recommended --api.requests-per-hour: estimated demand with 25% headroom, at least one full download, at most the account limit minus the reserve.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_api_requests_per_hour_recommended)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_full_refresh": {
+        "kind": "Panel",
+        "spec": {
+          "id": 16,
+          "title": "Full download cost",
+          "description": "Requests needed to download all information once, e.g. after a start without a cache file.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_exporter_full_refresh_requests_estimated)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "pie_power": {
+        "kind": "Panel",
+        "spec": {
+          "id": 17,
           "title": "Power status",
           "description": "",
           "links": [],
@@ -1179,7 +1597,7 @@
       "pie_models": {
         "kind": "Panel",
         "spec": {
-          "id": 13,
+          "id": 18,
           "title": "Server models",
           "description": "",
           "links": [],
@@ -1246,7 +1664,7 @@
       "bars_racks": {
         "kind": "Panel",
         "spec": {
-          "id": 14,
+          "id": 19,
           "title": "Servers per rack",
           "description": "",
           "links": [],
@@ -1323,7 +1741,7 @@
       "table_servers": {
         "kind": "Panel",
         "spec": {
-          "id": 15,
+          "id": 20,
           "title": "Servers",
           "description": "One row per server. Uplinks: aggregated = redundant uplink with ports in a LAG; disaggregated = redundant uplink split with the disaggregated_*_ports feature; single link = no redundancy.",
           "links": [],
@@ -1913,7 +2331,7 @@
       "table_power_feeds": {
         "kind": "Panel",
         "spec": {
-          "id": 16,
+          "id": 21,
           "title": "Power feeds",
           "description": "",
           "links": [],
@@ -2074,7 +2492,7 @@
       "table_oob": {
         "kind": "Panel",
         "spec": {
-          "id": 17,
+          "id": 22,
           "title": "OOB",
           "description": "OOB address and the status of the oob_public_access feature (public access to the OOB interface).",
           "links": [],
@@ -2228,7 +2646,7 @@
       "table_uplinks": {
         "kind": "Panel",
         "spec": {
-          "id": 18,
+          "id": 23,
           "title": "Uplinks",
           "description": "",
           "links": [],
@@ -2395,7 +2813,7 @@
       "table_l2_members": {
         "kind": "Panel",
         "spec": {
-          "id": 19,
+          "id": 24,
           "title": "L2 segment members",
           "description": "",
           "links": [],
@@ -2555,7 +2973,7 @@
       "table_l2_segments": {
         "kind": "Panel",
         "spec": {
-          "id": 20,
+          "id": 25,
           "title": "L2 segments",
           "description": "Segments with at least one member among the selected servers.",
           "links": [],
@@ -2708,7 +3126,7 @@
       "table_networks": {
         "kind": "Panel",
         "spec": {
-          "id": 21,
+          "id": 26,
           "title": "Server networks",
           "description": "",
           "links": [],
@@ -2844,7 +3262,7 @@
       "table_drives": {
         "kind": "Panel",
         "spec": {
-          "id": 22,
+          "id": 27,
           "title": "Drive slots",
           "description": "",
           "links": [],
@@ -3024,7 +3442,7 @@
       "bars_data_age": {
         "kind": "Panel",
         "spec": {
-          "id": 23,
+          "id": 28,
           "title": "Data age by resource",
           "description": "Time since the last successful refresh. Compare with the refresh intervals of the exporter.",
           "links": [],
@@ -3109,7 +3527,7 @@
       "ts_ratelimit": {
         "kind": "Panel",
         "spec": {
-          "id": 24,
+          "id": 29,
           "title": "API rate limit (account-wide)",
           "description": "X-RateLimit-* headers of API responses; the limit is shared by all API users of the account.",
           "links": [],
@@ -3219,7 +3637,7 @@
       "ts_headroom": {
         "kind": "Panel",
         "spec": {
-          "id": 25,
+          "id": 30,
           "title": "Headroom until reset (forecast)",
           "description": "Exporter request rate over the last 15 minutes (capped by its --api.requests-per-hour budget), projected until X-RateLimit-Reset, compared with X-RateLimit-Remaining minus the exporter's reserve. Below zero the exporter will hit the reserve and pause before the window resets. Requests of other API users of the account are not projected.",
           "links": [],
@@ -3238,7 +3656,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "((max(serverscom_api_ratelimit_remaining) - (max(serverscom_api_ratelimit_reserve) or vector(0))) - (clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour)) / 3600) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0)))",
+                        "expr": "((max(serverscom_api_ratelimit_remaining) - (max(serverscom_api_ratelimit_reserve) or vector(0))) - (clamp_max(sum(rate(serverscom_api_requests_total[15m])) or vector(0), scalar(max(serverscom_api_requests_budget_per_hour) / 3600)) * clamp_min(max(serverscom_api_ratelimit_reset_timestamp_seconds) - time(), 0)))",
                         "instant": false,
                         "range": true,
                         "legendFormat": "headroom"
@@ -3303,7 +3721,7 @@
       "ts_requests": {
         "kind": "Panel",
         "spec": {
-          "id": 26,
+          "id": 31,
           "title": "API requests per hour by endpoint",
           "description": "",
           "links": [],
@@ -3392,7 +3810,7 @@
       "ts_api_errors": {
         "kind": "Panel",
         "spec": {
-          "id": 27,
+          "id": 32,
           "title": "API errors by status code",
           "description": "",
           "links": [],
@@ -3460,7 +3878,7 @@
       "ts_refresh_errors": {
         "kind": "Panel",
         "spec": {
-          "id": 28,
+          "id": 33,
           "title": "Refresh errors",
           "description": "",
           "links": [],
@@ -3520,6 +3938,818 @@
                   }
                 },
                 "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_budget_used": {
+        "kind": "Panel",
+        "spec": {
+          "id": 34,
+          "title": "Budget used",
+          "description": "Requests in the current hourly window of the exporter's own budget.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_api_budget_used)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_budget_remaining": {
+        "kind": "Panel",
+        "spec": {
+          "id": 35,
+          "title": "Budget remaining",
+          "description": "Requests left in the current hourly window of --api.requests-per-hour.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_api_budget_remaining)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "red"
+                      },
+                      {
+                        "value": 1,
+                        "color": "orange"
+                      },
+                      {
+                        "value": 50,
+                        "color": "green"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_budget_reset": {
+        "kind": "Panel",
+        "spec": {
+          "id": 36,
+          "title": "Budget resets in",
+          "description": "Time until the exporter's budget window resets; 0 when no window is open.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "clamp_min(max(serverscom_api_budget_reset_timestamp_seconds) - time(), 0)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_budget_exhausted_24h": {
+        "kind": "Panel",
+        "spec": {
+          "id": 37,
+          "title": "Budget used up (24h)",
+          "description": "Hourly budget windows the exporter used up during the last 24 hours.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "sum(increase(serverscom_api_budget_exhausted_total[24h])) or vector(0)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "green"
+                      },
+                      {
+                        "value": 1,
+                        "color": "red"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_budget_configured": {
+        "kind": "Panel",
+        "spec": {
+          "id": 38,
+          "title": "Budget per hour",
+          "description": "--api.requests-per-hour",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_api_requests_budget_per_hour)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "stat_budget_recommended_2": {
+        "kind": "Panel",
+        "spec": {
+          "id": 39,
+          "title": "Recommended budget",
+          "description": "Recommended --api.requests-per-hour.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_api_requests_per_hour_recommended)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value",
+                "justifyMode": "center",
+                "orientation": "auto"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "table_intervals": {
+        "kind": "Panel",
+        "spec": {
+          "id": 40,
+          "title": "Refresh intervals",
+          "description": "Configured and recommended refresh interval per loop (0 = disabled) and the requests per hour it needs. Recommended differs from configured only when the demand does not fit into the account limit minus the reserve.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (loop) (serverscom_exporter_refresh_interval_seconds)",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (loop) (serverscom_exporter_refresh_interval_recommended_seconds)",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (loop) (serverscom_exporter_requests_per_hour_estimated)",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    },
+                    "refId": "C",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "Transformation",
+                  "group": "joinByField",
+                  "spec": {
+                    "options": {
+                      "byField": "loop",
+                      "mode": "outer"
+                    }
+                  }
+                },
+                {
+                  "kind": "Transformation",
+                  "group": "filterFieldsByName",
+                  "spec": {
+                    "options": {
+                      "exclude": {
+                        "pattern": "^Time.*$"
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "Transformation",
+                  "group": "organize",
+                  "spec": {
+                    "options": {
+                      "excludeByName": {},
+                      "renameByName": {
+                        "loop": "Loop",
+                        "Value #A": "Interval",
+                        "Value #B": "Recommended",
+                        "Value #C": "Requests / h"
+                      },
+                      "indexByName": {
+                        "loop": 0,
+                        "Value #A": 1,
+                        "Value #B": 2,
+                        "Value #C": 3
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "table",
+            "version": "",
+            "spec": {
+              "options": {
+                "showHeader": true,
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false,
+                  "reducer": [
+                    "sum"
+                  ],
+                  "fields": ""
+                },
+                "sortBy": [
+                  {
+                    "displayName": "Loop",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "align": "auto",
+                    "filterable": true,
+                    "cellOptions": {
+                      "type": "auto"
+                    }
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "text"
+                      }
+                    ]
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Interval"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "s"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Recommended"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "s"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Requests / h"
+                    },
+                    "properties": [
+                      {
+                        "id": "decimals",
+                        "value": 1
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "ts_demand": {
+        "kind": "Panel",
+        "spec": {
+          "id": 41,
+          "title": "Estimated demand by loop",
+          "description": "Requests per hour the configured refresh intervals need for the current number of servers, segments and racks (serverscom_exporter_requests_per_hour_estimated). Above the budget the exporter uses up --api.requests-per-hour and waits for the hourly reset; the log then recommends flags.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (loop) (serverscom_exporter_requests_per_hour_estimated)",
+                        "instant": false,
+                        "range": true,
+                        "legendFormat": "{{loop}}"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max(serverscom_api_requests_budget_per_hour)",
+                        "instant": false,
+                        "range": true,
+                        "legendFormat": "budget"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "custom": {
+                    "lineWidth": 1,
+                    "fillOpacity": 30,
+                    "showPoints": "never",
+                    "stacking": {
+                      "mode": "normal",
+                      "group": "A"
+                    }
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "budget"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.stacking",
+                        "value": {
+                          "mode": "none",
+                          "group": "A"
+                        }
+                      },
+                      {
+                        "id": "custom.fillOpacity",
+                        "value": 0
+                      },
+                      {
+                        "id": "custom.lineStyle",
+                        "value": {
+                          "fill": "dash",
+                          "dash": [
+                            10,
+                            10
+                          ]
+                        }
+                      },
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "red"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -3686,6 +4916,71 @@
                       "spec": {
                         "x": 0,
                         "y": 8,
+                        "width": 5,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_state"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 5,
+                        "y": 8,
+                        "width": 5,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_demand_ratio"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 10,
+                        "y": 8,
+                        "width": 5,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_demand"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 15,
+                        "y": 8,
+                        "width": 5,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_recommended"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 20,
+                        "y": 8,
+                        "width": 4,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_full_refresh"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 12,
                         "width": 6,
                         "height": 8,
                         "element": {
@@ -3698,7 +4993,7 @@
                       "kind": "GridLayoutItem",
                       "spec": {
                         "x": 6,
-                        "y": 8,
+                        "y": 12,
                         "width": 6,
                         "height": 8,
                         "element": {
@@ -3711,7 +5006,7 @@
                       "kind": "GridLayoutItem",
                       "spec": {
                         "x": 12,
-                        "y": 8,
+                        "y": 12,
                         "width": 12,
                         "height": 8,
                         "element": {
@@ -3964,6 +5259,110 @@
                         "element": {
                           "kind": "ElementReference",
                           "name": "ts_refresh_errors"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 23,
+                        "width": 4,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_used"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 4,
+                        "y": 23,
+                        "width": 4,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_remaining"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 8,
+                        "y": 23,
+                        "width": 4,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_reset"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 12,
+                        "y": 23,
+                        "width": 4,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_exhausted_24h"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 16,
+                        "y": 23,
+                        "width": 4,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_configured"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 20,
+                        "y": 23,
+                        "width": 4,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_budget_recommended_2"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 27,
+                        "width": 10,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "table_intervals"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 10,
+                        "y": 27,
+                        "width": 14,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "ts_demand"
                         }
                       }
                     }
