@@ -104,9 +104,16 @@ serverscom_api_ratelimit_remaining 1500
 # HELP serverscom_api_requests_total Requests sent to the Servers.com API by endpoint and HTTP status code.
 # TYPE serverscom_api_requests_total counter
 serverscom_api_requests_total{code="200",endpoint="locations"} 1
+# HELP serverscom_api_ratelimit_reserve Account-wide requests left for other API users; the exporter pauses when X-RateLimit-Remaining drops to it (--api.ratelimit-reserve).
+# TYPE serverscom_api_ratelimit_reserve gauge
+serverscom_api_ratelimit_reserve 10
+# HELP serverscom_api_requests_budget_per_hour Maximum API requests per hour this exporter may issue (--api.requests-per-hour).
+# TYPE serverscom_api_requests_budget_per_hour gauge
+serverscom_api_requests_budget_per_hour 1e+06
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected),
-		"serverscom_api_ratelimit_remaining", "serverscom_api_requests_total"); err != nil {
+		"serverscom_api_ratelimit_remaining", "serverscom_api_requests_total",
+		"serverscom_api_ratelimit_reserve", "serverscom_api_requests_budget_per_hour"); err != nil {
 		t.Fatal(err)
 	}
 }

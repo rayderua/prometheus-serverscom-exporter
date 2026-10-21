@@ -70,6 +70,7 @@ labels, so dashboards can filter by location and rack without joins.
 | `serverscom_exporter_refresh_errors_total` | Failed refreshes by resource |
 | `serverscom_api_requests_total`, `_request_duration_seconds` | Exporter API usage by endpoint |
 | `serverscom_api_ratelimit_limit`, `_remaining`, `_reset_timestamp_seconds` | Account-wide rate limit state |
+| `serverscom_api_ratelimit_reserve`, `serverscom_api_requests_budget_per_hour` | Configured reserve and request budget, for rate limit forecasts |
 
 Grafana variables for location and rack:
 

@@ -116,7 +116,7 @@ func NewClient(opts Options) (*Client, error) {
 		httpClient: &http.Client{Timeout: opts.Timeout},
 		pacer:      newPacer(time.Hour / time.Duration(opts.BudgetPerHour)),
 		logger:     opts.Logger,
-		metrics:    newClientMetrics(opts.Registerer),
+		metrics:    newClientMetrics(opts.Registerer, opts.BudgetPerHour, opts.Reserve),
 	}, nil
 }
 
@@ -367,7 +367,10 @@ type clientMetrics struct {
 	rateReset     prometheus.Gauge
 }
 
-func newClientMetrics(reg prometheus.Registerer) *clientMetrics {
+// newClientMetrics registers the client metrics. budgetPerHour and reserve
+// are exposed as constant gauges, so dashboards can forecast whether the
+// exporter fits into the account rate limit.
+func newClientMetrics(reg prometheus.Registerer, budgetPerHour, reserve int) *clientMetrics {
 	m := &clientMetrics{
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "serverscom_api_requests_total",
@@ -391,6 +394,17 @@ func newClientMetrics(reg prometheus.Registerer) *clientMetrics {
 			Help: "Unix time when the current API rate limit window resets, from X-RateLimit-Reset.",
 		}),
 	}
-	reg.MustRegister(m.requests, m.duration, m.rateLimit, m.rateRemaining, m.rateReset)
+	budget := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "serverscom_api_requests_budget_per_hour",
+		Help: "Maximum API requests per hour this exporter may issue (--api.requests-per-hour).",
+	})
+	budget.Set(float64(budgetPerHour))
+	reserveGauge := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "serverscom_api_ratelimit_reserve",
+		Help: "Account-wide requests left for other API users; the exporter pauses when X-RateLimit-Remaining drops to it (--api.ratelimit-reserve).",
+	})
+	reserveGauge.Set(float64(reserve))
+
+	reg.MustRegister(m.requests, m.duration, m.rateLimit, m.rateRemaining, m.rateReset, budget, reserveGauge)
 	return m
 }
