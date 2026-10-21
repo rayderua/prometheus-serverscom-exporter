@@ -71,6 +71,7 @@ defaults. Other flags go to `extraArgs`.
 | `config.refresh.autoMinInterval`, `autoMaxInterval` | `--refresh.auto-min-interval`, `--refresh.auto-max-interval` |
 | `config.refresh.referenceInterval` | `--refresh.reference-interval` |
 | `config.hostLabels` | `--collector.host-labels` |
+| `config.extraLabels` | `--label=<name>=<value>` for each entry |
 | `config.collectors.<name>` | `--no-collector.<name>` when `false` (drives, ports, networks, features, power-feeds, uplinks, l2-segments) |
 | `config.apiUrl`, `apiTimeout`, `apiPageSize` | `--api.url`, `--api.timeout`, `--api.page-size` |
 | `config.cacheSaveInterval` | `--cache.save-interval` |

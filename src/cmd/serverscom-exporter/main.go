@@ -66,6 +66,8 @@ func main() {
 		cacheSaveInterval = kingpin.Flag("cache.save-interval", "How often to write the cache file if it changed.").
 					Default("1m").Duration()
 
+		extraLabels = kingpin.Flag("label", "Extra label added to every metric, e.g. --label=account=prod. Repeatable.").
+				PlaceHolder("NAME=VALUE").StringMap()
 		hostLabels = kingpin.Flag("collector.host-labels", "Comma-separated Servers.com host label keys to expose in serverscom_host_labels; '*' for all.").
 				Default("*").String()
 		metricsPath = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").
@@ -104,8 +106,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Extra labels are added to every metric registered through reg.
+	if err := validateExtraLabels(*extraLabels, collector.New(nil, nil, nil).LabelNames()); err != nil {
+		logger.Error("Invalid extra label", "err", err)
+		os.Exit(1)
+	}
 	registry := prometheus.NewRegistry()
-	registry.MustRegister(
+	reg := prometheus.WrapRegistererWith(prometheus.Labels(*extraLabels), registry)
+	reg.MustRegister(
 		versioncollector.NewCollector(exporterName),
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -120,7 +128,7 @@ func main() {
 		BudgetPerHour: *apiBudget,
 		Reserve:       *apiReserve,
 		Logger:        logger.With("component", "api"),
-		Registerer:    registry,
+		Registerer:    reg,
 	})
 	if err != nil {
 		logger.Error("Cannot create API client", "err", err)
@@ -129,7 +137,7 @@ func main() {
 
 	logger.Info("Configuration",
 		"api_url", *apiURL, "requests_per_hour", *apiBudget,
-		"ratelimit_reserve", *apiReserve, "cache_file", *cacheFile)
+		"ratelimit_reserve", *apiReserve, "cache_file", *cacheFile, "extra_labels", fmt.Sprint(*extraLabels))
 
 	store := cache.NewStore(*cacheFile, logger.With("component", "cache"))
 	store.Load()
@@ -153,7 +161,7 @@ func main() {
 		}
 	}
 
-	registry.MustRegister(collector.New(store, strings.Split(*hostLabels, ","), disabled))
+	reg.MustRegister(collector.New(store, strings.Split(*hostLabels, ","), disabled))
 
 	ref := refresher.New(client, store, refresher.Config{
 		HostsInterval:   *hostsInterval,
@@ -164,7 +172,7 @@ func main() {
 		PageSize:        *apiPageSize,
 		BudgetPerHour:   *apiBudget,
 		Reserve:         *apiReserve,
-	}, logger.With("component", "refresher"), registry)
+	}, logger.With("component", "refresher"), reg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -230,3 +230,17 @@ tests:
             readOnly: true
       - exists:
           path: spec.template.metadata.annotations["checksum/web-config"]
+
+  - it: passes extra labels sorted by name
+    set:
+      config:
+        extraLabels:
+          env: dev
+          account: prod
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --label=account=prod
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --label=env=dev

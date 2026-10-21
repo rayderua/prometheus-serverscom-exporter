@@ -36,6 +36,10 @@ are versioned independently; see [CI and releases](README.md#ci-and-releases).
 
 ### Added
 
+- **Extra labels**: `--label=<name>=<value>` (repeatable; Helm:
+  `config.extraLabels`) adds labels to every metric, e.g. the account.
+  Names that clash with the exporter's own labels are rejected at start.
+
 - **Optional collectors**: `--[no-]collector.<name>` for `drives`, `ports`,
   `networks`, `features`, `power-feeds`, `uplinks` and `l2-segments`
   (Helm: `config.collectors.<name>: false`). A disabled collector is neither

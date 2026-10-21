@@ -101,6 +101,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 - {{ printf "--%s=%v" (index . 0) $value | quote }}
 {{- end }}
 {{- end }}
+{{- range $name, $value := $c.extraLabels }}
+- {{ printf "--label=%s=%v" $name $value | quote }}
+{{- end }}
 {{- range $name, $enabled := $c.collectors }}
 {{- if not $enabled }}
 - {{ printf "--no-collector.%s" $name | quote }}

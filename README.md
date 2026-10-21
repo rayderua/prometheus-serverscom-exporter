@@ -214,12 +214,31 @@ file are given.
 | `--cache.file` | empty (off) | File to persist the cache to |
 | `--cache.save-interval` | `1m` | How often to write the cache file if it changed |
 | `--collector.host-labels` | `*` | Servers.com label keys exposed in `serverscom_host_labels`, comma-separated; `*` for all |
+| `--label=<name>=<value>` | none | Extra label added to every metric; repeatable, see [Extra labels](#extra-labels) |
 | `--[no-]collector.<name>` | on | Optional collectors, see [Collectors](#collectors) |
 | `--web.listen-address` | `:9920` | Listen address; repeatable |
 | `--web.telemetry-path` | `/metrics` | Metrics path |
 | `--web.config.file` | empty | TLS and basic auth, see below |
 | `--log.level` | `info` | `debug`, `info`, `warn`, `error` |
 | `--log.format` | `logfmt` | `logfmt` or `json` |
+
+### Extra labels
+
+`--label=<name>=<value>` adds a label to every metric of the exporter,
+e.g. the account a token belongs to (the API does not expose account
+details):
+
+```sh
+--label=account=prod --label=env=production
+```
+
+In the Helm chart: `config.extraLabels: {account: prod, env: production}`.
+Names must be valid Prometheus label names, must not start with `__` or
+`label_` (used for [host labels](#host-labels)) and must not clash with the
+exporter's own labels such as `host_id`, `location`, `rack`, `loop` or
+`endpoint`; the exporter refuses to start otherwise. If Prometheus adds a
+target label with the same name, it keeps the exporter's value as
+`exported_<name>` unless `honor_labels` is set.
 
 ### Collectors
 

@@ -55,6 +55,10 @@ config:
   cacheSaveInterval: ""
   # --collector.host-labels: comma-separated label keys, "*" for all.
   hostLabels: ""
+  # --label: extra labels added to every metric, e.g. {account: prod}.
+  # Names must not clash with the exporter's own labels (host_id, location,
+  # loop, ...) or start with label_; the exporter refuses to start otherwise.
+  extraLabels: {}
   # Optional collectors; false adds --no-collector.<name>. A disabled
   # collector is neither fetched from the API nor exposed.
   collectors:

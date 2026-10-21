@@ -269,10 +269,19 @@ pass "cache file loaded"
 echo "== restart with collectors disabled and a fixed interval"
 stop_exporter
 start_mock
-start_exporter --no-collector.drives --no-collector.features --no-collector.l2-segments --refresh.ports-interval=15m
+start_exporter --no-collector.drives --no-collector.features --no-collector.l2-segments --refresh.ports-interval=15m \
+  --label=account=smoke
 wait_for "/-/healthy with collectors disabled" curl -sf "http://$EXPORTER_ADDR/-/healthy"
 wait_for "servers in /metrics" servers_loaded
 expect "ports" '^serverscom_host_connection_info\{'
+expect "extra label on host metrics" '^serverscom_host_info\{account="smoke",'
+expect "extra label on API metrics" '^serverscom_api_requests_total\{account="smoke",'
+expect "extra label on build info" '^serverscom_exporter_build_info\{account="smoke",'
+file=$(metrics) || fail "cannot fetch /metrics"
+if grep '^serverscom_' "$file" | grep -v 'account="smoke"'; then
+  fail "series above lack the extra label"
+fi
+pass "every serverscom_ series has the extra label"
 expect "power feeds" '^serverscom_host_power_feed_up\{.*\} 1$'
 expect "redundant uplink" '^serverscom_host_uplink_redundant\{.*\} 1$'
 expect_none "no drives" '^serverscom_host_drive_'
@@ -280,8 +289,8 @@ expect_none "no features" '^serverscom_host_feature_'
 expect_none "no aggregation state without features" '^serverscom_host_uplink_aggregated\{'
 expect_none "no L2 segments" '^serverscom_l2_'
 expect_none "no refresh timestamps of disabled collectors" 'resource="(drives|features|l2-segments)"'
-expect "fixed ports interval" '^serverscom_exporter_refresh_interval_seconds\{loop="ports"\} 900$'
-expect "ports interval is fixed" '^serverscom_exporter_refresh_interval_auto\{loop="ports"\} 0$'
+expect "fixed ports interval" '^serverscom_exporter_refresh_interval_seconds\{.*loop="ports".*\} 900$'
+expect "ports interval is fixed" '^serverscom_exporter_refresh_interval_auto\{.*loop="ports".*\} 0$'
 expect_none "disabled collectors are not estimated" 'loop="(drives|features|l2-segments)"'
 expect_none "no refresh errors" '^serverscom_exporter_refresh_errors_total\{.*\} [1-9]'
 

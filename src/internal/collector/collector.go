@@ -12,6 +12,7 @@
 package collector
 
 import (
+	"slices"
 	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -44,6 +45,9 @@ type Collector struct {
 	store      *cache.Store
 	hostLabels *labelMapper
 	disabled   cache.DisabledCollectors
+
+	// labelNames are the label names of all metrics, without label_* host labels.
+	labelNames map[string]bool
 
 	hostInfo               *prometheus.Desc
 	hostStatus             *prometheus.Desc
@@ -78,11 +82,21 @@ type Collector struct {
 // labels become label_* Prometheus labels; "*" allows all of them. Metrics of
 // disabled collectors are not exposed.
 func New(store *cache.Store, allowedHostLabels []string, disabled cache.DisabledCollectors) *Collector {
+	labelNames := map[string]bool{}
+	for _, name := range hostLabelNames {
+		labelNames[name] = true
+	}
 	hostDesc := func(name, help string, extra ...string) *prometheus.Desc {
+		for _, label := range extra {
+			labelNames[label] = true
+		}
 		labels := append(append([]string{}, hostLabelNames...), extra...)
 		return prometheus.NewDesc(prometheus.BuildFQName(namespace, "host", name), help, labels, nil)
 	}
 	desc := func(name, help string, labels ...string) *prometheus.Desc {
+		for _, label := range labels {
+			labelNames[label] = true
+		}
 		return prometheus.NewDesc(prometheus.BuildFQName(namespace, "", name), help, labels, nil)
 	}
 
@@ -90,6 +104,7 @@ func New(store *cache.Store, allowedHostLabels []string, disabled cache.Disabled
 		store:      store,
 		hostLabels: newLabelMapper(allowedHostLabels),
 		disabled:   disabled,
+		labelNames: labelNames,
 
 		hostInfo: hostDesc("info", "Dedicated server attributes from the server list.",
 			"rack_id", "type", "configuration", "public_ipv4", "private_ipv4", "oob_ipv4", "lease_start"),
@@ -179,6 +194,20 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 }
 
 func (c *Collector) enabled(name cache.Collector) bool { return c.disabled.Enabled(name) }
+
+// HostLabelPrefix starts the names of labels made from Servers.com host labels.
+const HostLabelPrefix = "label_"
+
+// LabelNames returns the label names the collector's metrics use, except the
+// HostLabelPrefix ones. Extra labels must not reuse them.
+func (c *Collector) LabelNames() []string {
+	names := make([]string, 0, len(c.labelNames))
+	for name := range c.labelNames {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
 
 // commonHostLabels returns values for hostLabelNames.
 func (c *Collector) commonHostLabels(snapshot *cache.Snapshot, server api.DedicatedServer) []string {
