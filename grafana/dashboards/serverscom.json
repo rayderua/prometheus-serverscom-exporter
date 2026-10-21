@@ -4805,12 +4805,12 @@
           }
         }
       },
-      "stat_rack_map": {
+      "table_rack_map": {
         "kind": "Panel",
         "spec": {
           "id": 42,
           "title": "$rack",
-          "description": "Servers of the rack, sorted by name (the API does not report rack units). Green: OK. Orange: degraded (a power feed is down or a redundant uplink is not aggregated). Red: not operational. Dark red: powered off. Click a server to filter the dashboard by it.",
+          "description": "Servers of the rack, sorted by name, one row of the same height per server (the API does not report rack units, so rows are not real rack positions). Green: OK. Orange: degraded (a power feed is down or a redundant uplink is not aggregated). Red: not operational. Dark red: powered off. A rack with more servers than fit scrolls. Click a server to filter the dashboard by it.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4860,29 +4860,31 @@
           },
           "vizConfig": {
             "kind": "VizConfig",
-            "group": "stat",
+            "group": "table",
             "version": "",
             "spec": {
               "options": {
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
+                "showHeader": false,
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false,
+                  "reducer": [
+                    "sum"
                   ],
                   "fields": "",
-                  "values": true,
-                  "limit": 500
-                },
-                "colorMode": "background",
-                "graphMode": "none",
-                "textMode": "value_and_name",
-                "justifyMode": "center",
-                "orientation": "horizontal",
-                "wideLayout": true,
-                "showPercentChange": false
+                  "countRows": false
+                }
               },
               "fieldConfig": {
                 "defaults": {
-                  "displayName": "${__data.fields.title}",
+                  "custom": {
+                    "align": "auto",
+                    "cellOptions": {
+                      "type": "auto"
+                    },
+                    "inspect": false,
+                    "minWidth": 40
+                  },
                   "unit": "none",
                   "color": {
                     "mode": "thresholds"
@@ -4930,15 +4932,75 @@
                         }
                       }
                     }
-                  ],
-                  "links": [
-                    {
-                      "title": "Show ${__data.fields.title}",
-                      "url": "/d/${__dashboard.uid}?${__url_time_range}&var-location=$location&var-rack=$rack&var-server=${__data.fields.host_id}"
-                    }
                   ]
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "title"
+                    },
+                    "properties": [
+                      {
+                        "id": "links",
+                        "value": [
+                          {
+                            "title": "Show ${__data.fields.title}",
+                            "url": "/d/${__dashboard.uid}?${__url_time_range}&var-location=$location&var-rack=$rack&var-server=${__data.fields.host_id}"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Value"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-background",
+                          "mode": "basic",
+                          "applyToRow": true
+                        }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "right"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 125
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Time"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hidden",
+                        "value": true
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "host_id"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hidden",
+                        "value": true
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -5223,10 +5285,10 @@
                         "x": 0,
                         "y": 0,
                         "width": 4,
-                        "height": 14,
+                        "height": 8,
                         "element": {
                           "kind": "ElementReference",
-                          "name": "stat_rack_map"
+                          "name": "table_rack_map"
                         },
                         "repeat": {
                           "mode": "variable",

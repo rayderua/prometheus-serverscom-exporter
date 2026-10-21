@@ -7,8 +7,10 @@
 Overview, Racks, Servers, Power & OOB, Network, Drives and Exporter. Variables:
 data source, location, rack and server.
 
-**Racks** shows one panel per selected rack with a tile per server, sorted by
-name (the API does not report rack units), colored by state:
+**Racks** shows one compact panel per selected rack with a row per server,
+sorted by name. Rows have the same height in every rack, but they are not
+rack positions: the API does not report rack units. A rack with more servers
+than fit scrolls. The row is colored by state:
 
 | Color | State |
 |---|---|

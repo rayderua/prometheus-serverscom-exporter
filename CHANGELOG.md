@@ -65,8 +65,9 @@ are versioned independently; see [CI and releases](README.md#ci-and-releases).
   interval is auto.
 - Dashboard: the *Refresh intervals* table shows whether each interval is
   auto or fixed.
-- Dashboard: **Racks** tab, a panel per rack with a tile per server colored
-  by state (OK, degraded, not operational, powered off).
+- Dashboard: **Racks** tab, a compact panel per rack with a row of the same
+  height per server, colored by state (OK, degraded, not operational,
+  powered off); a rack with more servers than fit scrolls.
 - Mock API: `POST /-/rename?id=<id>&title=<title>` renames a server at
   runtime, for testing renames.
 
