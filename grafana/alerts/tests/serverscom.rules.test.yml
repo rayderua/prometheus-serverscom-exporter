@@ -1,0 +1,240 @@
+# Unit tests for serverscom.rules.yml:
+#   promtool test rules grafana/alerts/tests/serverscom.rules.test.yml
+rule_files:
+  - ../serverscom.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Powered off server alerts after 10 minutes; monitoring=off silences it.
+  - interval: 1m
+    input_series:
+      - series: 'serverscom_host_powered_on{host_id="h1",title="node-1",location="ams1",rack="R1"}'
+        values: '0x20'
+      - series: 'serverscom_host_powered_on{host_id="h2",title="node-2",location="ams1",rack="R1"}'
+        values: '0x20'
+      - series: 'serverscom_host_labels{host_id="h2",title="node-2",location="ams1",rack="R1",label_monitoring="off"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ServerscomHostPoweredOff
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ServerscomHostPoweredOff
+        exp_alerts:
+          - exp_labels: {severity: critical, host_id: h1, title: node-1, location: ams1, rack: R1}
+            exp_annotations:
+              summary: Server node-1 is powered off
+              description: >-
+                Server node-1 (h1, ams1 / R1) has not reported power_status powered_on for 10 minutes.
+                Set the Servers.com label monitoring=off on servers that are off on purpose.
+
+  # A split redundant uplink alerts; an aggregated one and a single link do not.
+  - interval: 1m
+    input_series:
+      - series: 'serverscom_host_uplink_redundant{host_id="h1",title="node-1",location="ams1",rack="R1",uplink="private"}'
+        values: '1x20'
+      - series: 'serverscom_host_uplink_aggregated{host_id="h1",title="node-1",location="ams1",rack="R1",uplink="private"}'
+        values: '0x20'
+      - series: 'serverscom_host_uplink_redundant{host_id="h1",title="node-1",location="ams1",rack="R1",uplink="public"}'
+        values: '1x20'
+      - series: 'serverscom_host_uplink_aggregated{host_id="h1",title="node-1",location="ams1",rack="R1",uplink="public"}'
+        values: '1x20'
+      - series: 'serverscom_host_uplink_redundant{host_id="h2",title="node-2",location="ams1",rack="R1",uplink="private"}'
+        values: '0x20'
+      - series: 'serverscom_host_uplink_aggregated{host_id="h2",title="node-2",location="ams1",rack="R1",uplink="private"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ServerscomUplinkDisaggregated
+        exp_alerts:
+          - exp_labels: {severity: warning, host_id: h1, title: node-1, location: ams1, rack: R1, uplink: private}
+            exp_annotations:
+              summary: private uplink of node-1 is not aggregated
+              description: >-
+                The redundant private uplink of server node-1 (h1, ams1 / R1) was split with the
+                disaggregated_private_ports feature: its ports are no longer in a LAG and have no redundancy.
+
+  # Power feed down and a feature stuck in a transitional status.
+  - interval: 1m
+    input_series:
+      - series: 'serverscom_host_power_feed_up{host_id="h1",title="node-1",location="ams1",rack="R1",feed="Power 2"}'
+        values: '0x10'
+      - series: 'serverscom_host_feature_status{host_id="h1",title="node-1",location="ams1",rack="R1",feature="disaggregated_private_ports",status="activation"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ServerscomPowerFeedDown
+        exp_alerts:
+          - exp_labels: {severity: warning, host_id: h1, title: node-1, location: ams1, rack: R1, feed: Power 2}
+            exp_annotations:
+              summary: Power feed Power 2 of node-1 is down
+              description: 'Power feed Power 2 of server node-1 (h1, ams1 / R1) is off: the server has lost power redundancy.'
+      - eval_time: 31m
+        alertname: ServerscomFeatureStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host_id: h1
+              title: node-1
+              location: ams1
+              rack: R1
+              feature: disaggregated_private_ports
+              status: activation
+            exp_annotations:
+              summary: Feature disaggregated_private_ports of node-1 is stuck in activation
+              description: >-
+                Feature disaggregated_private_ports of server node-1 (h1, ams1 / R1) has been in the
+                transitional status activation for 30 minutes.
+
+  # Release scheduled in 3 days.
+  - interval: 1m
+    input_series:
+      - series: 'serverscom_host_scheduled_release_timestamp_seconds{host_id="h1",title="node-1",location="ams1",rack="R1"}'
+        values: '259200x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ServerscomHostReleaseScheduled
+        exp_alerts:
+          - exp_labels: {severity: warning, host_id: h1, title: node-1, location: ams1, rack: R1}
+            exp_annotations:
+              summary: Server node-1 is scheduled to be released
+              description: >-
+                Server node-1 (h1, ams1 / R1) will be released in 2d 23h 59m 0s.
+                Abort the release in the portal if it is unexpected.
+
+  # A server that left the account alerts; exporter downtime (no hosts at all) does not.
+  - interval: 1m
+    input_series:
+      - series: 'serverscom_host_info{host_id="h1",title="node-1",location="ams1",rack="R1"}'
+        values: '1x30'
+      - series: 'serverscom_host_info{host_id="h2",title="node-2",location="ams1",rack="R1"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ServerscomHostRemoved
+        exp_alerts:
+          - exp_labels: {severity: warning, host_id: h1, title: node-1, location: ams1, rack: R1}
+            exp_annotations:
+              summary: Server node-1 disappeared from the account
+              description: >-
+                Server node-1 (h1, ams1 / R1) was in the account an hour ago and is not any more.
+                The alert resolves by itself after an hour.
+      - eval_time: 150m
+        alertname: ServerscomHostRemoved
+        exp_alerts: []
+
+  # One of two drives disappeared compared to a day ago.
+  - interval: 1h
+    input_series:
+      - series: 'serverscom_host_drive_capacity{host_id="h1",title="node-1",location="ams1",rack="R1",position="0"}'
+        values: '960x30'
+      - series: 'serverscom_host_drive_capacity{host_id="h1",title="node-1",location="ams1",rack="R1",position="1"}'
+        values: '960x23 _x7'
+    alert_rule_test:
+      - eval_time: 10h
+        alertname: ServerscomHostDrivesMissing
+        exp_alerts: []
+      - eval_time: 26h
+        alertname: ServerscomHostDrivesMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, host_id: h1, title: node-1, location: ams1, rack: R1}
+            exp_annotations:
+              summary: Server node-1 has fewer drives than a day ago
+              description: Server node-1 (h1, ams1 / R1) has 1 drives installed, fewer than a day ago.
+
+  # Exporter: missing metrics, stale data, used up budget.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="serverscom"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ServerscomExporterAbsent
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Servers.com exporter metrics are missing
+              description: >-
+                No serverscom_exporter_build_info for 10 minutes: the exporter is down or not scraped,
+                so all other Servers.com alerts are blind.
+
+  - interval: 1m
+    input_series:
+      - series: 'serverscom_exporter_build_info{job="sc",instance="x"}'
+        values: '1x30'
+      - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="hosts"}'
+        values: '0x30'
+      - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="host_features"}'
+        values: '0+60x30'
+      - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="hosts"}'
+        values: '120x30'
+      - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="host_features"}'
+        values: '300x30'
+      - series: 'serverscom_api_budget_exhausted{job="sc",instance="x"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ServerscomExporterDataStale
+        exp_alerts:
+          - exp_labels: {severity: warning, job: sc, instance: x, loop: hosts}
+            exp_annotations:
+              summary: Servers.com hosts data is stale
+              description: >-
+                The exporter has not refreshed hosts for 20m 0s, more than three refresh intervals.
+                Check the exporter log, API errors and the request budget.
+      - eval_time: 1m
+        alertname: ServerscomExporterBudgetExhausted
+        exp_alerts:
+          - exp_labels: {severity: warning, job: sc, instance: x}
+            exp_annotations:
+              summary: Servers.com exporter used up its hourly request budget
+              description: >-
+                The exporter used up --api.requests-per-hour and waits for the hourly reset; data gets stale
+                meanwhile. Compare serverscom_api_requests_per_hour_recommended with the budget.
+
+  # Demand above the budget, account close to its limit, rejected token.
+  - interval: 1m
+    input_series:
+      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="host_features"}'
+        values: '468x40'
+      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="hosts"}'
+        values: '30x40'
+      - series: 'serverscom_api_requests_budget_per_hour{job="sc",instance="x"}'
+        values: '400x40'
+      - series: 'serverscom_api_ratelimit_remaining{job="sc",instance="x"}'
+        values: '400x40'
+      - series: 'serverscom_api_ratelimit_reserve{job="sc",instance="x"}'
+        values: '300x40'
+      - series: 'serverscom_api_ratelimit_limit{job="sc",instance="x"}'
+        values: '2000x40'
+      - series: 'serverscom_api_requests_total{job="sc",instance="x",endpoint="dedicated_servers",code="401"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: ServerscomExporterDemandExceedsBudget
+        exp_alerts:
+          - exp_labels: {severity: warning, job: sc, instance: x}
+            exp_annotations:
+              summary: Servers.com exporter configuration needs more requests than its budget
+              description: >-
+                The configured refresh intervals need about 498 requests per hour, more than
+                --api.requests-per-hour. The exporter log recommends the flags to change.
+      - eval_time: 6m
+        alertname: ServerscomAPIRateLimitLow
+        exp_alerts:
+          - exp_labels: {severity: warning, job: sc, instance: x}
+            exp_annotations:
+              summary: Servers.com account is close to its API rate limit
+              description: >-
+                Only 400 account-wide API requests are left in the current window. The exporter pauses at its
+                reserve; other API users (Terraform, CLI) may get 429 responses.
+      - eval_time: 20m
+        alertname: ServerscomAPIAuthFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, job: sc, instance: x}
+            exp_annotations:
+              summary: Servers.com API rejects the exporter token
+              description: >-
+                The Servers.com API answered 401/403 10 times in 10 minutes: the token is invalid, expired or
+                lacks permissions. No data is refreshed.

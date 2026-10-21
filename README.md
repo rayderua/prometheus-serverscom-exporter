@@ -10,7 +10,7 @@ dashboards and alerts.
 |------------|----------|
 | `src/`     | The exporter (Go) and its Dockerfile, see [src/README.md](src/README.md) |
 | `charts/`  | Helm chart (planned) |
-| `grafana/` | Grafana dashboard (v2, tabs), see [grafana/README.md](grafana/README.md); alert rules planned |
+| `grafana/` | Grafana dashboard (v2, tabs) and alert rules for Prometheus, vmalert and Grafana, see [grafana/README.md](grafana/README.md) |
 
 ## Quick start
 

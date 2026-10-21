@@ -1,0 +1,1108 @@
+# Generated alert rules of prometheus-serverscom-exporter.
+# The rule files in this directory share one definition; change them together.
+# Grafana alerting provisioning file. Set SERVERSCOM_ALERTS_DATASOURCE_UID in Grafana's
+# environment to the UID of the Prometheus/VictoriaMetrics data source. "$$" is a literal "$".
+apiVersion: 1
+groups:
+- orgId: 1
+  name: serverscom-hosts
+  folder: Servers.com
+  interval: 1m
+  rules:
+  - uid: sc-host-powered-off
+    title: ServerscomHostPoweredOff
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_host_powered_on == 0 unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 10m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: critical
+    annotations:
+      summary: Server {{ $$labels.title }} is powered off
+      description: Server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location }} / {{ $$labels.rack }}) has
+        not reported power_status powered_on for 10 minutes. Set the Servers.com label monitoring=off on servers that are
+        off on purpose.
+    isPaused: false
+  - uid: sc-host-not-operational
+    title: ServerscomHostNotOperational
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_host_operational_status{status!="normal"} == 1 unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 15m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: critical
+    annotations:
+      summary: Server {{ $$labels.title }} is {{ $$labels.status }}
+      description: Server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location }} / {{ $$labels.rack }}) reports
+        operational_status {{ $$labels.status }} instead of normal.
+    isPaused: false
+  - uid: sc-host-not-active
+    title: ServerscomHostNotActive
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_host_status{status!="active"} == 1 unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 1h
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: info
+    annotations:
+      summary: Server {{ $$labels.title }} is {{ $$labels.status }}
+      description: Server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location }} / {{ $$labels.rack }}) has
+        had the lifecycle status {{ $$labels.status }} for an hour (e.g. a reinstall or release in progress).
+    isPaused: false
+  - uid: sc-host-release-scheduled
+    title: ServerscomHostReleaseScheduled
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: (serverscom_host_scheduled_release_timestamp_seconds - time()) < 7 * 86400
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Server {{ $$labels.title }} is scheduled to be released
+      description: Server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location }} / {{ $$labels.rack }}) will
+        be released in {{ $$values.query.Value | humanizeDuration }}. Abort the release in the portal if it is unexpected.
+    isPaused: false
+  - uid: sc-host-removed
+    title: ServerscomHostRemoved
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: |-
+          serverscom_host_info offset 1h unless on (host_id) serverscom_host_info
+          and on () (count(serverscom_host_info) > 0)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Server {{ $$labels.title }} disappeared from the account
+      description: Server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location }} / {{ $$labels.rack }}) was
+        in the account an hour ago and is not any more. The alert resolves by itself after an hour.
+    isPaused: false
+  - uid: sc-host-drives-missing
+    title: ServerscomHostDrivesMissing
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: |-
+          (
+            count by (host_id, title, location, rack) (serverscom_host_drive_capacity)
+            or 0 * count by (host_id, title, location, rack) (serverscom_host_drive_capacity offset 1d)
+          )
+          < count by (host_id, title, location, rack) (serverscom_host_drive_capacity offset 1d) unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Server {{ $$labels.title }} has fewer drives than a day ago
+      description: Server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location }} / {{ $$labels.rack }}) has
+        {{ $$values.query.Value }} drives installed, fewer than a day ago.
+    isPaused: false
+- orgId: 1
+  name: serverscom-power-network
+  folder: Servers.com
+  interval: 1m
+  rules:
+  - uid: sc-power-feed-down
+    title: ServerscomPowerFeedDown
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_host_power_feed_up == 0 unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 5m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Power feed {{ $$labels.feed }} of {{ $$labels.title }} is down
+      description: 'Power feed {{ $$labels.feed }} of server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location
+        }} / {{ $$labels.rack }}) is off: the server has lost power redundancy.'
+    isPaused: false
+  - uid: sc-uplink-disaggregated
+    title: ServerscomUplinkDisaggregated
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_host_uplink_redundant == 1 and serverscom_host_uplink_aggregated == 0 unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 15m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: '{{ $$labels.uplink }} uplink of {{ $$labels.title }} is not aggregated'
+      description: 'The redundant {{ $$labels.uplink }} uplink of server {{ $$labels.title }} ({{ $$labels.host_id }}, {{
+        $$labels.location }} / {{ $$labels.rack }}) was split with the disaggregated_{{ $$labels.uplink }}_ports feature:
+        its ports are no longer in a LAG and have no redundancy.'
+    isPaused: false
+  - uid: sc-feature-stuck
+    title: ServerscomFeatureStuck
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_host_feature_status{status=~".+ation"} == 1
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 30m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Feature {{ $$labels.feature }} of {{ $$labels.title }} is stuck in {{ $$labels.status }}
+      description: Feature {{ $$labels.feature }} of server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location
+        }} / {{ $$labels.rack }}) has been in the transitional status {{ $$labels.status }} for 30 minutes.
+    isPaused: false
+  - uid: sc-o-o-b-public-access-enabled
+    title: ServerscomOOBPublicAccessEnabled
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_host_feature_enabled{feature="oob_public_access"} == 1 unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Public OOB access is enabled on {{ $$labels.title }}
+      description: 'The oob_public_access feature is active on server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location
+        }} / {{ $$labels.rack }}): its OOB interface is reachable from the internet.'
+    isPaused: false
+  - uid: sc-l2-segment-not-active
+    title: ServerscomL2SegmentNotActive
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_l2_segment_info{status!="active"} == 1
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 15m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: L2 segment {{ $$labels.segment }} is {{ $$labels.status }}
+      description: L2 segment {{ $$labels.segment }} ({{ $$labels.segment_id }}, {{ $$labels.location_group }}) has had the
+        status {{ $$labels.status }} for 15 minutes.
+    isPaused: false
+  - uid: sc-l2-member-not-active
+    title: ServerscomL2MemberNotActive
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_l2_segment_member_info{status!="active"} == 1
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 15m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: '{{ $$labels.title }} is {{ $$labels.status }} in L2 segment {{ $$labels.segment }}'
+      description: Server {{ $$labels.title }} ({{ $$labels.host_id }}, {{ $$labels.location }} / {{ $$labels.rack }}) has
+        had the status {{ $$labels.status }} in L2 segment {{ $$labels.segment }} for 15 minutes.
+    isPaused: false
+- orgId: 1
+  name: serverscom-exporter
+  folder: Servers.com
+  interval: 1m
+  rules:
+  - uid: sc-exporter-absent
+    title: ServerscomExporterAbsent
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: absent(serverscom_exporter_build_info)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 10m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: critical
+    annotations:
+      summary: Servers.com exporter metrics are missing
+      description: 'No serverscom_exporter_build_info for 10 minutes: the exporter is down or not scraped, so all other Servers.com
+        alerts are blind.'
+    isPaused: false
+  - uid: sc-exporter-data-stale
+    title: ServerscomExporterDataStale
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: |-
+          (
+            time() - label_replace(serverscom_exporter_last_refresh_success_timestamp_seconds, "loop", "$$1", "resource", "(.*)")
+          )
+          > ignoring (resource) 3 * (serverscom_exporter_refresh_interval_seconds > 0)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 10m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Servers.com {{ $$labels.loop }} data is stale
+      description: The exporter has not refreshed {{ $$labels.loop }} for {{ $$values.query.Value | humanizeDuration }}, more
+        than three refresh intervals. Check the exporter log, API errors and the request budget.
+    isPaused: false
+  - uid: sc-exporter-refresh-errors
+    title: ServerscomExporterRefreshErrors
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: increase(serverscom_exporter_refresh_errors_total[30m]) > 0
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 30m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Servers.com exporter fails to refresh {{ $$labels.resource }}
+      description: Refreshing {{ $$labels.resource }} has been failing for 30 minutes; cached data is kept. See the exporter
+        log for the failing requests.
+    isPaused: false
+  - uid: sc-a-p-i-auth-failed
+    title: ServerscomAPIAuthFailed
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: sum by (job, instance) (increase(serverscom_api_requests_total{code=~"401|403"}[10m])) > 0
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: critical
+    annotations:
+      summary: Servers.com API rejects the exporter token
+      description: 'The Servers.com API answered 401/403 {{ $$values.query.Value }} times in 10 minutes: the token is invalid,
+        expired or lacks permissions. No data is refreshed.'
+    isPaused: false
+  - uid: sc-a-p-i-server-errors
+    title: ServerscomAPIServerErrors
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: sum by (job, instance) (increase(serverscom_api_requests_total{code=~"5..|error"}[15m])) > 5
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 15m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Servers.com API requests are failing
+      description: '{{ $$values.query.Value }} API requests failed with 5xx or network errors in 15 minutes.'
+    isPaused: false
+  - uid: sc-exporter-budget-exhausted
+    title: ServerscomExporterBudgetExhausted
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_api_budget_exhausted == 1
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Servers.com exporter used up its hourly request budget
+      description: The exporter used up --api.requests-per-hour and waits for the hourly reset; data gets stale meanwhile.
+        Compare serverscom_api_requests_per_hour_recommended with the budget.
+    isPaused: false
+  - uid: sc-exporter-demand-exceeds-budget
+    title: ServerscomExporterDemandExceedsBudget
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: |-
+          sum by (job, instance) (serverscom_exporter_requests_per_hour_estimated)
+          > on (job, instance) serverscom_api_requests_budget_per_hour
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 30m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Servers.com exporter configuration needs more requests than its budget
+      description: The configured refresh intervals need about {{ $$values.query.Value | humanize }} requests per hour, more
+        than --api.requests-per-hour. The exporter log recommends the flags to change.
+    isPaused: false
+  - uid: sc-exporter-intervals-too-short
+    title: ServerscomExporterIntervalsTooShort
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: serverscom_exporter_refresh_interval_recommended_seconds != serverscom_exporter_refresh_interval_seconds
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 30m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Servers.com {{ $$labels.loop }} refresh interval is too short for the account limit
+      description: The {{ $$labels.loop }} refresh interval needs more requests than the account limit leaves for the exporter;
+        the recommended interval is {{ $$values.query.Value | humanizeDuration }}.
+    isPaused: false
+  - uid: sc-a-p-i-rate-limit-low
+    title: ServerscomAPIRateLimitLow
+    condition: threshold
+    data:
+    - refId: query
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+      model:
+        refId: query
+        expr: |-
+          serverscom_api_ratelimit_remaining <= 1.5 * serverscom_api_ratelimit_reserve
+          and serverscom_api_ratelimit_limit > 0
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
+    - refId: prometheus_math
+      datasourceUid: __expr__
+      model:
+        refId: prometheus_math
+        type: math
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: is_number($$query) || is_nan($$query) || is_inf($$query)
+    - refId: threshold
+      datasourceUid: __expr__
+      model:
+        refId: threshold
+        type: threshold
+        datasource:
+          type: __expr__
+          uid: __expr__
+        expression: prometheus_math
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 5m
+    missing_series_evals_to_resolve: 1
+    labels:
+      severity: warning
+    annotations:
+      summary: Servers.com account is close to its API rate limit
+      description: Only {{ $$values.query.Value }} account-wide API requests are left in the current window. The exporter
+        pauses at its reserve; other API users (Terraform, CLI) may get 429 responses.
+    isPaused: false
