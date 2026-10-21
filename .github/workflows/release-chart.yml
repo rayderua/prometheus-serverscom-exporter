@@ -1,0 +1,95 @@
+name: Release chart
+
+# Chart releases are made from tags chart-X.Y.Z on commits of the main branch.
+# The tag must match `version` in Chart.yaml, and the image of `appVersion`
+# must already be released (see release-image.yml).
+on:
+  push:
+    tags: ["chart-[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository_owner }}/prometheus-serverscom-exporter
+  CHART_DIR: charts/serverscom-exporter
+  CHART_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
+  HELM_VERSION: v4.2.0
+
+jobs:
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Tag must point to a commit on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} is not on the main branch, nothing is released"
+            exit 1
+          fi
+
+      - name: Read versions
+        run: |
+          chart_version=$(sed -n 's/^version:[[:space:]]*//p' "$CHART_DIR/Chart.yaml" | tr -d "\"'")
+          app_version=$(sed -n 's/^appVersion:[[:space:]]*//p' "$CHART_DIR/Chart.yaml" | tr -d "\"'")
+          if [[ "${GITHUB_REF_NAME#chart-}" != "$chart_version" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match version ${chart_version} in Chart.yaml"
+            exit 1
+          fi
+          echo "CHART_VERSION=$chart_version" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$app_version" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image of appVersion must exist
+        run: |
+          if ! docker buildx imagetools inspect "${IMAGE}:${APP_VERSION}" > /dev/null; then
+            echo "::error::Image ${IMAGE}:${APP_VERSION} (appVersion) is not released; push tag v${APP_VERSION} first"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          helm lint --strict "$CHART_DIR" --set apiToken.value=ci
+          helm package "$CHART_DIR" --destination dist
+
+      - name: Push to ${{ env.CHART_REPO }}
+        run: |
+          echo "$GH_TOKEN" | helm registry login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+          helm push "dist/serverscom-exporter-${CHART_VERSION}.tgz" "$CHART_REPO"
+
+      - name: GitHub release
+        run: |
+          # Chart releases never become "Latest": that mark stays with the exporter.
+          flags=(--title "Chart ${CHART_VERSION}" --generate-notes --notes-file notes.md --latest=false)
+          if [[ "$CHART_VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          # Notes start at the previous chart release, not at an image release.
+          if prev=$(git describe --tags --match 'chart-[0-9]*' --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null); then
+            flags+=(--notes-start-tag "$prev")
+          fi
+          printf 'Chart: `helm install serverscom-exporter %s/serverscom-exporter --version %s`\n\nImage (appVersion): `%s:%s`\n' \
+            "$CHART_REPO" "$CHART_VERSION" "$IMAGE" "$APP_VERSION" > notes.md
+          gh release create "$GITHUB_REF_NAME" "dist/serverscom-exporter-${CHART_VERSION}.tgz" "${flags[@]}"

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: serverscom-exporter
+description: Prometheus exporter for Servers.com Enterprise Bare Metal
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/rayderua/prometheus-serverscom-exporter
+sources:
+  - https://github.com/rayderua/prometheus-serverscom-exporter
+keywords:
+  - prometheus
+  - exporter
+  - serverscom
+  - bare-metal

@@ -2,7 +2,7 @@
 
 # Build context is src/:
 #   docker build -t serverscom-exporter \
-#     --build-arg VERSION=$(git describe --tags --always) \
+#     --build-arg VERSION=$(git describe --tags --match 'v*' --always) \
 #     --build-arg REVISION=$(git rev-parse HEAD) \
 #     src/
 

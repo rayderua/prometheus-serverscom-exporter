@@ -47,7 +47,7 @@ func main() {
 		apiPageSize = kingpin.Flag("api.page-size", "Page size (per_page) for collection endpoints.").
 				Default("100").Int()
 		apiBudget = kingpin.Flag("api.requests-per-hour", "Hourly request budget of this exporter. Requests are not delayed until it is used up; then the exporter waits for the hourly reset. The account limit is 2000/h and is shared with other API users.").
-				Default("600").Int()
+				Default("1000").Int()
 		apiReserve = kingpin.Flag("api.ratelimit-reserve", "Pause when the account-wide X-RateLimit-Remaining drops to this value, leaving the rest to other API users.").
 				Default("300").Int()
 

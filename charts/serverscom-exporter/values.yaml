@@ -1,0 +1,202 @@
+image:
+  repository: ghcr.io/rayderua/prometheus-serverscom-exporter
+  # Defaults to the chart appVersion.
+  tag: ""
+  # Takes precedence over tag, e.g. sha256:...
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Servers.com API token. The exporter reads it from a file mounted from a Secret
+# (--api.token-file).
+apiToken:
+  # Token value; the chart creates a Secret for it. Prefer existingSecret.
+  value: ""
+  # Name of an existing Secret with the token. Takes precedence over value.
+  existingSecret: ""
+  # Key of the token in the Secret.
+  secretKey: token
+
+# Exporter flags. Empty values keep the exporter defaults.
+config:
+  # --api.url
+  apiUrl: ""
+  # --api.timeout
+  apiTimeout: ""
+  # --api.page-size
+  apiPageSize: ""
+  # --api.requests-per-hour: hourly request budget of the exporter.
+  # The account limit (2000/h) is shared with Terraform, the CLI and others.
+  requestsPerHour: ""
+  # --api.ratelimit-reserve: pause when the account-wide remaining drops to it.
+  ratelimitReserve: ""
+  refresh:
+    # --refresh.hosts-interval
+    hostsInterval: ""
+    # --refresh.details-interval
+    detailsInterval: ""
+    # --refresh.features-interval ("0" disables)
+    featuresInterval: ""
+    # --refresh.l2-interval
+    l2Interval: ""
+    # --refresh.reference-interval
+    referenceInterval: ""
+  # --cache.save-interval
+  cacheSaveInterval: ""
+  # --collector.host-labels: comma-separated label keys, "*" for all.
+  hostLabels: ""
+  # --web.telemetry-path
+  metricsPath: /metrics
+  # --log.level: debug, info, warn, error
+  logLevel: ""
+  # --log.format: logfmt, json
+  logFormat: ""
+
+# Additional exporter flags, e.g. ["--api.timeout=1m"].
+extraArgs: []
+
+# Optional exporter-toolkit web config (TLS, basic auth), passed as
+# --web.config.file. See
+# https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md
+webConfig:
+  enabled: false
+  # Content of web-config.yml; the chart stores it in a Secret.
+  config: {}
+  # Name of an existing Secret with web-config.yml. Takes precedence over config.
+  existingSecret: ""
+  secretKey: web-config.yml
+  # Secrets with TLS certificates to mount, referenced from the web config.
+  # - name: exporter-tls      # Secret name
+  #   mountPath: /etc/serverscom-exporter/tls
+  tlsSecrets: []
+
+# Cache persisted to /data/cache.json (--cache.file). After a restart the
+# exporter serves full metrics immediately and only refetches what is due.
+persistence:
+  enabled: true
+  # Without a PVC, an emptyDir keeps the cache across container restarts only.
+  # Use an existing claim instead of creating one.
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 100Mi
+  annotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+# Always one replica: every replica spends the same account-wide API limit.
+# The Deployment uses the Recreate strategy for the same reason.
+revisionHistoryLimit: 3
+
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+probes:
+  # httpGet on /-/healthy, or tcpSocket. The web config's basic auth also
+  # protects /-/healthy, so use tcpSocket with basic auth.
+  type: httpGet
+  # HTTPS when the web config enables TLS.
+  scheme: HTTP
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+terminationGracePeriodSeconds: 30
+
+service:
+  type: ClusterIP
+  port: 9920
+  annotations: {}
+  labels: {}
+
+serviceMonitor:
+  enabled: false
+  # Namespace of the ServiceMonitor; defaults to the release namespace.
+  namespace: ""
+  labels: {}
+  # Metrics only change with the refresh loops (hosts every 2m by default),
+  # so frequent scrapes add nothing.
+  interval: 1m
+  scrapeTimeout: 30s
+  scheme: ""
+  tlsConfig: {}
+  basicAuth: {}
+  relabelings: []
+  metricRelabelings: []
+
+prometheusRule:
+  enabled: false
+  namespace: ""
+  labels: {}
+  # Labels added to every alert.
+  additionalLabels: {}
+  # Default alerts; set any of them to false to disable it.
+  alerts:
+    exporterDown: true
+    refreshStale: true
+    refreshErrors: true
+    budgetExhausted: true
+    ratelimitLow: true
+  # Seconds without a successful refresh before ServerscomRefreshStale fires.
+  staleThreshold: 3600
+  # Additional rules.
+  rules: []
+
+networkPolicy:
+  enabled: false
+  # Sources allowed to scrape /metrics. Empty allows all.
+  # - namespaceSelector:
+  #     matchLabels:
+  #       kubernetes.io/metadata.name: monitoring
+  ingressFrom: []
+  # Egress to DNS and the Servers.com API (HTTPS anywhere) is allowed when
+  # restricted; add extra rules here.
+  restrictEgress: false
+  extraEgress: []
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

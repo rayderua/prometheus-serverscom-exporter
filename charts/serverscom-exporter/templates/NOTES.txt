@@ -1,0 +1,20 @@
+serverscom-exporter is running as a single replica: every replica would spend
+the same account-wide Servers.com API limit (2000 requests/hour).
+
+Metrics:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "serverscom-exporter.fullname" . }} {{ .Values.service.port }}
+  curl http://localhost:{{ .Values.service.port }}{{ .Values.config.metricsPath | default "/metrics" }}
+
+The exporter logs whether its request budget fits the configuration and which
+flags to change if not:
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "serverscom-exporter.fullname" . }} | grep -i recommend
+{{- if not .Values.persistence.enabled }}
+
+Persistence is disabled: after the pod is rescheduled the exporter downloads
+everything again, which costs API requests.
+{{- end }}
+{{- if not .Values.serviceMonitor.enabled }}
+
+No ServiceMonitor was created (serviceMonitor.enabled=false). Add a scrape
+config for the Service or enable it.
+{{- end }}

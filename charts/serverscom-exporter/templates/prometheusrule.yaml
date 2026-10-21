@@ -1,0 +1,87 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- $a := .Values.prometheusRule.alerts }}
+{{- $sel := printf "namespace=%q, service=%q" .Release.Namespace (include "serverscom-exporter.fullname" .) }}
+{{- $labels := .Values.prometheusRule.additionalLabels }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "serverscom-exporter.fullname" . }}
+  namespace: {{ .Values.prometheusRule.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "serverscom-exporter.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: serverscom-exporter
+      rules:
+        {{- if $a.exporterDown }}
+        - alert: ServerscomExporterDown
+          expr: up{ {{- $sel -}} } == 0
+          for: 5m
+          labels:
+            severity: warning
+            {{- with $labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: Servers.com exporter is down
+            description: {{`Prometheus cannot scrape {{ $labels.instance }} for 5 minutes.`}}
+        {{- end }}
+        {{- if $a.refreshStale }}
+        - alert: ServerscomRefreshStale
+          expr: time() - serverscom_exporter_last_refresh_success_timestamp_seconds{ {{- $sel }}, resource="hosts"} > {{ .Values.prometheusRule.staleThreshold }}
+          for: 5m
+          labels:
+            severity: warning
+            {{- with $labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: Servers.com server list is stale
+            description: {{`The server list was last refreshed {{ $value | humanizeDuration }} ago. Check the exporter logs for API errors or rate limit pauses.`}}
+        {{- end }}
+        {{- if $a.refreshErrors }}
+        - alert: ServerscomRefreshErrors
+          expr: increase(serverscom_exporter_refresh_errors_total{ {{- $sel -}} }[30m]) > 3
+          for: 15m
+          labels:
+            severity: warning
+            {{- with $labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: Servers.com exporter refreshes keep failing
+            description: {{`Refreshes of {{ $labels.resource }} failed {{ $value | humanize }} times in 30 minutes.`}}
+        {{- end }}
+        {{- if $a.budgetExhausted }}
+        - alert: ServerscomBudgetExhausted
+          expr: serverscom_api_budget_exhausted{ {{- $sel -}} } == 1
+          for: 15m
+          labels:
+            severity: info
+            {{- with $labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: Servers.com exporter used up its hourly request budget
+            description: {{`The exporter waits for the budget window to reset. See serverscom_api_requests_per_hour_recommended for the recommended --api.requests-per-hour.`}}
+        {{- end }}
+        {{- if $a.ratelimitLow }}
+        - alert: ServerscomRateLimitLow
+          expr: serverscom_api_ratelimit_remaining{ {{- $sel -}} } <= serverscom_api_ratelimit_reserve{ {{- $sel -}} }
+          for: 5m
+          labels:
+            severity: warning
+            {{- with $labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: Servers.com account API rate limit is nearly used up
+            description: {{`Only {{ $value }} requests are left in the account-wide window. The exporter pauses; Terraform and other API users may be throttled too.`}}
+        {{- end }}
+        {{- with .Values.prometheusRule.rules }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

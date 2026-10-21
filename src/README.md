@@ -24,7 +24,7 @@ and `/metrics` only renders the current snapshot.
 
 Two limits apply, and the exporter never delays requests while both have room:
 
-- **Its own budget**, `--api.requests-per-hour` (default 600). Counted like
+- **Its own budget**, `--api.requests-per-hour` (default 1000). Counted like
   the API limit: a window opens with the first request and resets an hour
   later. When the window is used up, the exporter logs a warning, sets
   `serverscom_api_budget_exhausted` and waits for the reset.
@@ -139,7 +139,7 @@ page and `serverscom_exporter_build_info`:
 
 ```sh
 docker build -t serverscom-exporter \
-  --build-arg VERSION=$(git describe --tags --always) \
+  --build-arg VERSION=$(git describe --tags --match 'v*' --always) \
   --build-arg REVISION=$(git rev-parse HEAD) \
   --build-arg BRANCH=$(git rev-parse --abbrev-ref HEAD) \
   --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \

@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: v4.2.0
+  KUBECONFORM_VERSION: v0.7.0
+
+jobs:
+  go:
+    name: Go tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      # Build only, to catch Dockerfile errors; images are pushed by the release workflow.
+      - uses: docker/build-push-action@v6
+        with:
+          context: src
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VERSION=${{ github.sha }}
+            REVISION=${{ github.sha }}
+            BRANCH=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # tags for the version check
+      - name: Chart version must be bumped
+        run: |
+          chart_dir=charts/serverscom-exporter
+          version=$(sed -n 's/^version:[[:space:]]*//p' "$chart_dir/Chart.yaml" | tr -d "\"'")
+          if git rev-parse -q --verify "refs/tags/chart-${version}" > /dev/null \
+             && ! git diff --quiet "chart-${version}" HEAD -- "$chart_dir"; then
+            echo "::error file=$chart_dir/Chart.yaml::Chart changed since chart-${version} was released; bump version in Chart.yaml"
+            exit 1
+          fi
+          if last=$(git describe --tags --match 'chart-[0-9]*' --abbrev=0 HEAD 2>/dev/null); then
+            newest=$(printf '%s\n%s\n' "${last#chart-}" "$version" | sort -V | tail -1)
+            if [[ "$newest" != "$version" ]]; then
+              echo "::error file=$chart_dir/Chart.yaml::Chart version ${version} is lower than the last release ${last#chart-}"
+              exit 1
+            fi
+          fi
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Install kubeconform
+        run: |
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kubeconform
+      - name: Lint
+        run: |
+          helm lint --strict charts/serverscom-exporter --set apiToken.value=ci
+          helm lint --strict charts/serverscom-exporter --set apiToken.existingSecret=ci,persistence.enabled=false
+      - name: Validate manifests
+        run: |
+          helm template ci charts/serverscom-exporter \
+            --set apiToken.value=ci \
+            --set serviceMonitor.enabled=true \
+            --set prometheusRule.enabled=true \
+            --set networkPolicy.enabled=true,networkPolicy.restrictEgress=true \
+            --set webConfig.enabled=true,webConfig.config.basic_auth_users.ci=hash \
+          | kubeconform -strict -summary \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'

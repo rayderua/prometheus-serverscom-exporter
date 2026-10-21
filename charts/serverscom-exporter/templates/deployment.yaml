@@ -1,0 +1,158 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "serverscom-exporter.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "serverscom-exporter.labels" . | nindent 4 }}
+spec:
+  # A single replica: every replica spends the same account-wide API limit.
+  replicas: 1
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy:
+    # No overlap of old and new pods, and the RWO cache volume is released first.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "serverscom-exporter.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "serverscom-exporter.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if not .Values.apiToken.existingSecret }}
+        checksum/token: {{ .Values.apiToken.value | sha256sum }}
+        {{- end }}
+        {{- if and .Values.webConfig.enabled (not .Values.webConfig.existingSecret) }}
+        checksum/web-config: {{ toYaml .Values.webConfig.config | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "serverscom-exporter.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: exporter
+          image: {{ include "serverscom-exporter.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            {{- include "serverscom-exporter.args" . | nindent 12 }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- if eq .Values.probes.type "tcpSocket" }}
+            tcpSocket:
+              port: http
+            {{- else }}
+            httpGet:
+              path: /-/healthy
+              port: http
+              scheme: {{ .Values.probes.scheme }}
+            {{- end }}
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe:
+            {{- if eq .Values.probes.type "tcpSocket" }}
+            tcpSocket:
+              port: http
+            {{- else }}
+            httpGet:
+              path: /-/healthy
+              port: http
+              scheme: {{ .Values.probes.scheme }}
+            {{- end }}
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: token
+              mountPath: /etc/serverscom-exporter/token
+              readOnly: true
+            - name: data
+              mountPath: /data
+            {{- if .Values.webConfig.enabled }}
+            - name: web-config
+              mountPath: /etc/serverscom-exporter/web
+              readOnly: true
+            {{- range .Values.webConfig.tlsSecrets }}
+            - name: tls-{{ .name }}
+              mountPath: {{ .mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: token
+          secret:
+            secretName: {{ include "serverscom-exporter.tokenSecretName" . }}
+            items:
+              - key: {{ .Values.apiToken.secretKey }}
+                path: {{ .Values.apiToken.secretKey }}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "serverscom-exporter.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.webConfig.enabled }}
+        - name: web-config
+          secret:
+            secretName: {{ include "serverscom-exporter.webConfigSecretName" . }}
+            items:
+              - key: {{ .Values.webConfig.secretKey }}
+                path: {{ .Values.webConfig.secretKey }}
+        {{- range .Values.webConfig.tlsSecrets }}
+        - name: tls-{{ .name }}
+          secret:
+            secretName: {{ .name }}
+        {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
