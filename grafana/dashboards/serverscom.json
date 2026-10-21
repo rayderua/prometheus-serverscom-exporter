@@ -89,13 +89,13 @@
               "name": "${datasource}"
             },
             "spec": {
-              "qryType": 1,
-              "query": "label_values(serverscom_host_info, location)",
+              "qryType": 3,
+              "query": "query_result(count by (location) (serverscom_host_info))",
               "refId": "PrometheusVariableQueryEditor-VariableQuery"
             }
           },
-          "definition": "label_values(serverscom_host_info, location)",
-          "regex": "",
+          "definition": "query_result(count by (location) (serverscom_host_info))",
+          "regex": "/location=\"(?<value>[^\"]+)\"/",
           "sort": "alphabeticalAsc",
           "options": [],
           "multi": true,
@@ -128,13 +128,13 @@
               "name": "${datasource}"
             },
             "spec": {
-              "qryType": 1,
-              "query": "label_values(serverscom_host_info{location=~\"$location\"}, rack)",
+              "qryType": 3,
+              "query": "query_result(count by (rack) (serverscom_host_info{location=~\"$location\"}))",
               "refId": "PrometheusVariableQueryEditor-VariableQuery"
             }
           },
-          "definition": "label_values(serverscom_host_info{location=~\"$location\"}, rack)",
-          "regex": "",
+          "definition": "query_result(count by (rack) (serverscom_host_info{location=~\"$location\"}))",
+          "regex": "/rack=\"(?<value>[^\"]+)\"/",
           "sort": "alphabeticalAsc",
           "options": [],
           "multi": true,
@@ -167,19 +167,20 @@
               "name": "${datasource}"
             },
             "spec": {
-              "qryType": 1,
-              "query": "label_values(serverscom_host_info{location=~\"$location\", rack=~\"$rack\"}, title)",
+              "qryType": 3,
+              "query": "query_result(count by (host_id, title) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\"}))",
               "refId": "PrometheusVariableQueryEditor-VariableQuery"
             }
           },
-          "definition": "label_values(serverscom_host_info{location=~\"$location\", rack=~\"$rack\"}, title)",
-          "regex": "",
+          "definition": "query_result(count by (host_id, title) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\"}))",
+          "regex": "/host_id=\"(?<value>[^\"]+)\".*title=\"(?<text>[^\"]+)\"/",
           "sort": "alphabeticalAsc",
           "options": [],
           "multi": true,
           "includeAll": true,
           "allValue": ".*",
-          "allowCustomValue": true
+          "allowCustomValue": false,
+          "description": "Servers by current name; selected by host_id, so a renamed server stays selected."
         }
       }
     ],
@@ -206,7 +207,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}) or vector(0)",
+                        "expr": "count(serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -283,7 +284,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} == 1) or vector(0)",
+                        "expr": "count(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 1) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -360,7 +361,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} == 0) or vector(0)",
+                        "expr": "count(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -441,7 +442,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", status!=\"normal\"}) or vector(0)",
+                        "expr": "count(serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"}) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -522,7 +523,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} == 0) or vector(0)",
+                        "expr": "count(serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -603,7 +604,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} == 0 and serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} == 1) or vector(0)",
+                        "expr": "count(serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0 and serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 1) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -1518,7 +1519,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count by (status) (serverscom_host_power_status{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "count by (status) (serverscom_host_power_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{status}}"
@@ -1616,7 +1617,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count by (server_model) (serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "count by (server_model) (serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{server_model}}"
@@ -1683,7 +1684,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sort_desc(count by (location, rack) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}))",
+                        "expr": "sort_desc(count by (location, rack) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{location}} / {{rack}}"
@@ -1760,7 +1761,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, title, location, rack, configuration, private_ipv4, public_ipv4, oob_ipv4) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "max by (host_id, title, location, rack, configuration, private_ipv4, public_ipv4, oob_ipv4) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1781,7 +1782,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, power) (label_replace(serverscom_host_power_status{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}, \"power\", \"$1\", \"status\", \"(.*)\"))",
+                        "expr": "max by (host_id, power) (label_replace(serverscom_host_power_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}, \"power\", \"$1\", \"status\", \"(.*)\"))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1802,7 +1803,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, operational) (label_replace(serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}, \"operational\", \"$1\", \"status\", \"(.*)\"))",
+                        "expr": "max by (host_id, operational) (label_replace(serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}, \"operational\", \"$1\", \"status\", \"(.*)\"))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1823,7 +1824,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, server_model, operating_system) (serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "max by (host_id, server_model, operating_system) (serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1844,7 +1845,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count by (host_id) (serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "count by (host_id) (serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1865,7 +1866,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (host_id) (serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "sum by (host_id) (serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1886,7 +1887,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", uplink=\"public\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", uplink=\"public\"})",
+                        "expr": "max by (host_id) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"public\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"public\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1907,7 +1908,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", uplink=\"private\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", uplink=\"private\"})",
+                        "expr": "max by (host_id) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"private\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"private\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1928,7 +1929,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id) (serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", feature=\"oob_public_access\"})",
+                        "expr": "max by (host_id) (serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1949,7 +1950,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (host_id) (1 - serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "sum by (host_id) (1 - serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1970,7 +1971,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count by (host_id) (serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "count by (host_id) (serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2350,7 +2351,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_host_power_feed_status{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}",
+                        "expr": "serverscom_host_power_feed_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2511,7 +2512,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, title, location, rack, oob_ipv4) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "max by (host_id, title, location, rack, oob_ipv4) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2532,7 +2533,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, oob_status) (label_replace(serverscom_host_feature_status{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", feature=\"oob_public_access\"}, \"oob_status\", \"$1\", \"status\", \"(.*)\"))",
+                        "expr": "max by (host_id, oob_status) (label_replace(serverscom_host_feature_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"}, \"oob_status\", \"$1\", \"status\", \"(.*)\"))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2665,7 +2666,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_host_uplink_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} * on (host_id, uplink) group_left () (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "serverscom_host_uplink_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} * on (host_id, uplink) group_left () (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2832,7 +2833,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}",
+                        "expr": "serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2992,7 +2993,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_l2_segment_info * on (segment_id) group_left () count by (segment_id) (serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"})",
+                        "expr": "serverscom_l2_segment_info * on (segment_id) group_left () count by (segment_id) (serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -3145,7 +3146,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_host_network_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}",
+                        "expr": "serverscom_host_network_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -3281,7 +3282,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "(serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"} * on (host_id, position) group_left () serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", title=~\"$server\"}) or (serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", title=~\"$server\", populated=\"false\"} * 0)",
+                        "expr": "(serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} * on (host_id, position) group_left () serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) or (serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", populated=\"false\"} * 0)",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -4803,6 +4804,145 @@
             }
           }
         }
+      },
+      "stat_rack_map": {
+        "kind": "Panel",
+        "spec": {
+          "id": 42,
+          "title": "$rack",
+          "description": "Servers of the rack, sorted by name (the API does not report rack units). Green: OK. Orange: degraded (a power feed is down or a redundant uplink is not aggregated). Red: not operational. Dark red: powered off. Click a server to filter the dashboard by it.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (host_id, title) (\n  label_replace(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\"} * 0, \"check\", \"base\", \"\", \"\")\n  or label_replace(1 * (count by (host_id, title) (serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\"} == 0) > bool 0), \"check\", \"feeds\", \"\", \"\")\n  or label_replace(1 * (count by (host_id, title) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\"} == 1 and serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\"} == 0) > bool 0), \"check\", \"uplinks\", \"\", \"\")\n  or label_replace(2 * (count by (host_id, title) (serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", status!=\"normal\"}) > bool 0), \"check\", \"operational\", \"\", \"\")\n  or label_replace(3 * (1 - serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\"}), \"check\", \"power\", \"\", \"\")\n)",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "Transformation",
+                  "group": "sortBy",
+                  "spec": {
+                    "options": {
+                      "fields": {},
+                      "sort": [
+                        {
+                          "field": "title",
+                          "desc": false
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": true,
+                  "limit": 500
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value_and_name",
+                "justifyMode": "center",
+                "orientation": "horizontal",
+                "wideLayout": true,
+                "showPercentChange": false
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "displayName": "${__data.fields.title}",
+                  "unit": "none",
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "green"
+                      },
+                      {
+                        "value": 1,
+                        "color": "orange"
+                      },
+                      {
+                        "value": 2,
+                        "color": "red"
+                      },
+                      {
+                        "value": 3,
+                        "color": "dark-red"
+                      }
+                    ]
+                  },
+                  "mappings": [
+                    {
+                      "type": "value",
+                      "options": {
+                        "0": {
+                          "text": "OK",
+                          "index": 0
+                        },
+                        "1": {
+                          "text": "Degraded",
+                          "index": 1
+                        },
+                        "2": {
+                          "text": "Not operational",
+                          "index": 2
+                        },
+                        "3": {
+                          "text": "Powered off",
+                          "index": 3
+                        }
+                      }
+                    }
+                  ],
+                  "links": [
+                    {
+                      "title": "Show ${__data.fields.title}",
+                      "url": "/d/${__dashboard.uid}?${__url_time_range}&var-location=$location&var-rack=$rack&var-server=${__data.fields.host_id}"
+                    }
+                  ]
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -5061,6 +5201,38 @@
                         "element": {
                           "kind": "ElementReference",
                           "name": "bars_racks"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "kind": "TabsLayoutTab",
+            "spec": {
+              "title": "Racks",
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 4,
+                        "height": 14,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "stat_rack_map"
+                        },
+                        "repeat": {
+                          "mode": "variable",
+                          "value": "rack",
+                          "direction": "h",
+                          "maxPerRow": 6
                         }
                       }
                     }

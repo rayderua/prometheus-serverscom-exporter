@@ -53,11 +53,18 @@ groups:
         the account an hour ago and is not any more. The alert resolves by itself after an hour.
   - alert: ServerscomHostDrivesMissing
     expr: |-
+      # Counted per host_id: a renamed server or one moved to another rack keeps
+      # its drives. Title, location and rack come from the current server list.
       (
-        count by (host_id, title, location, rack) (serverscom_host_drive_capacity)
-        or 0 * count by (host_id, title, location, rack) (serverscom_host_drive_capacity offset 1d)
+        (
+          count by (host_id) (serverscom_host_drive_capacity)
+          or 0 * count by (host_id) (serverscom_host_drive_capacity offset 1d)
+        )
+        < count by (host_id) (serverscom_host_drive_capacity offset 1d)
       )
-      < count by (host_id, title, location, rack) (serverscom_host_drive_capacity offset 1d) unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+      * on (host_id) group_left (title, location, rack)
+        topk by (host_id) (1, max by (host_id, title, location, rack) (serverscom_host_info))
+      unless on (host_id) serverscom_host_labels{label_monitoring="off"}
     labels:
       severity: warning
     annotations:

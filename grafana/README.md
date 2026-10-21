@@ -4,8 +4,25 @@
 
 [`dashboards/serverscom.json`](dashboards/serverscom.json) is a Grafana
 **dashboard v2** resource (`apiVersion: dashboard.grafana.app/v2`) with tabs:
-Overview, Servers, Power & OOB, Network, Drives and Exporter. Variables:
+Overview, Racks, Servers, Power & OOB, Network, Drives and Exporter. Variables:
 data source, location, rack and server.
+
+**Racks** shows one panel per selected rack with a tile per server, sorted by
+name (the API does not report rack units), colored by state:
+
+| Color | State |
+|---|---|
+| green | OK |
+| orange | degraded: a power feed is down or a redundant uplink is not aggregated |
+| red | not operational |
+| dark red | powered off |
+
+Clicking a server filters the whole dashboard by it.
+
+**Renamed servers.** Variables come from instant queries, so they list only
+current names, not names seen earlier in the time range. The server variable
+selects by `host_id` and shows the title, so a selection survives a rename,
+and all panels filter by `host_id`.
 
 Requirements:
 

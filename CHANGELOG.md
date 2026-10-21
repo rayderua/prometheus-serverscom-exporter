@@ -65,6 +65,21 @@ are versioned independently; see [CI and releases](README.md#ci-and-releases).
   interval is auto.
 - Dashboard: the *Refresh intervals* table shows whether each interval is
   auto or fixed.
+- Dashboard: **Racks** tab, a panel per rack with a tile per server colored
+  by state (OK, degraded, not operational, powered off).
+- Mock API: `POST /-/rename?id=<id>&title=<title>` renames a server at
+  runtime, for testing renames.
+
+### Fixed
+
+- Dashboard: renamed servers (and renamed racks or locations) no longer show
+  up twice in the variables. Variables use instant queries instead of
+  `label_values` over the time range; the server variable selects by
+  `host_id` and shows the title, and panels filter by `host_id`. Links with
+  `var-server=<title>` from 0.1.0 no longer match.
+- Alert `ServerscomHostDrivesMissing` fired for a day after a server was
+  renamed or moved to another rack ("0 drives"). Drives are now counted per
+  `host_id`; title, location and rack come from the current server list.
 
 ### Changed
 

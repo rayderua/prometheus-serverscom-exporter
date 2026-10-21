@@ -470,9 +470,10 @@ prometheusRule:
 ## Grafana dashboard
 
 [`grafana/dashboards/serverscom.json`](grafana/dashboards/serverscom.json) has
-tabs for Overview (including a rate limit forecast), Servers, Power & OOB,
-Network, Drives and Exporter, with variables for data source, location, rack
-and server.
+tabs for Overview (including a rate limit forecast), Racks (a map of racks
+with their servers colored by state), Servers, Power & OOB, Network, Drives and
+Exporter, with variables for data source, location, rack and server. Renamed
+servers do not show up twice; see [grafana/README.md](grafana/README.md).
 
 It is a Grafana **dashboard v2** resource and needs Grafana 13 or newer. v2
 dashboards cannot be provisioned from files or ConfigMaps (the Grafana

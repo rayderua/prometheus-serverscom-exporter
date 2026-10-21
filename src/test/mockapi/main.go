@@ -12,9 +12,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -118,16 +121,41 @@ func main() {
 			writeJSON(w, obj)
 		})
 	}
+	// Servers can be renamed at runtime (POST /-/rename?id=srv-2&title=db-2),
+	// to test how dashboards and alerts handle renames.
+	var serversMu sync.Mutex
+	currentServers := func() []map[string]any {
+		serversMu.Lock()
+		defer serversMu.Unlock()
+		return slices.Clone(servers)
+	}
 	findServer := func(id string) map[string]any {
-		for _, s := range servers {
+		for _, s := range currentServers() {
 			if s["id"] == id {
 				return s
 			}
 		}
 		return nil
 	}
+	mux.HandleFunc("POST /-/rename", func(w http.ResponseWriter, r *http.Request) {
+		id, title := r.URL.Query().Get("id"), r.URL.Query().Get("title")
+		serversMu.Lock()
+		defer serversMu.Unlock()
+		for i, s := range servers {
+			if s["id"] == id && title != "" {
+				renamed := maps.Clone(s)
+				renamed["title"], renamed["updated_at"] = title, time.Now().UTC()
+				servers[i] = renamed
+				log.Printf("renamed %s to %s", id, title)
+				return
+			}
+		}
+		http.Error(w, "unknown id or empty title", http.StatusBadRequest)
+	})
 
-	collection("/hosts/dedicated_servers", servers)
+	mux.HandleFunc("GET /v1/hosts/dedicated_servers", func(w http.ResponseWriter, r *http.Request) {
+		writePage(w, r, currentServers())
+	})
 	object("/hosts/dedicated_servers/{id}", findServer)
 	collection("/hosts/dedicated_servers/{id}/drive_slots", driveSlots)
 	collection("/hosts/dedicated_servers/{id}/connections", connections)
