@@ -90,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # tags: the upgrade test starts from the last release
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -123,9 +125,18 @@ jobs:
             REVISION=${{ github.sha }}
             BRANCH=${{ github.ref_name }}
           cache-from: type=gha
-      - name: Smoke test against the mock API
+      - name: Smoke and upgrade test against the mock API
         working-directory: src
-        run: test/smoke.sh prometheus-serverscom-exporter:smoke
+        run: |
+          # The last stable release, e.g. v0.1.0 -> image tag 0.1.0.
+          last=$(git tag --list 'v*' --sort=-v:refname | grep -Ev -- '-' | head -1 || true)
+          if [[ -n "$last" ]]; then
+            export PREVIOUS="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/prometheus-serverscom-exporter:${last#v}"
+            docker pull "$PREVIOUS"
+          else
+            echo "::warning::No release tag yet, skipping the upgrade test"
+          fi
+          test/smoke.sh prometheus-serverscom-exporter:smoke
 
   chart:
     name: Helm chart

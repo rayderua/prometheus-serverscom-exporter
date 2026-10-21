@@ -19,7 +19,7 @@ func TestStorePersistsAndLoads(t *testing.T) {
 	store.Update(func(s *Snapshot) {
 		s.Hosts["h1"] = &Host{
 			Server:  api.DedicatedServer{ID: "h1", Title: "node-1"},
-			Details: &HostDetails{FetchedAt: time.Unix(100, 0).UTC()},
+			Details: &HostDetails{Fetched: map[Collector]time.Time{CollectorDrives: time.Unix(100, 0).UTC()}},
 		}
 		s.LastSuccess[ResourceHosts] = time.Unix(200, 0).UTC()
 	})
@@ -34,7 +34,7 @@ func TestStorePersistsAndLoads(t *testing.T) {
 	if snapshot.Hosts["h1"].Server.Title != "node-1" {
 		t.Fatalf("host not restored: %+v", snapshot.Hosts)
 	}
-	if !snapshot.Hosts["h1"].Details.FetchedAt.Equal(time.Unix(100, 0)) {
+	if !snapshot.Hosts["h1"].Details.Fetched[CollectorDrives].Equal(time.Unix(100, 0)) {
 		t.Fatalf("details not restored: %+v", snapshot.Hosts["h1"].Details)
 	}
 	if !snapshot.LastSuccess[ResourceHosts].Equal(time.Unix(200, 0)) {

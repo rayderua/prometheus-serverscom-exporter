@@ -43,6 +43,7 @@ var hostLabelNames = []string{"host_id", "title", "location", "rack"}
 type Collector struct {
 	store      *cache.Store
 	hostLabels *labelMapper
+	disabled   cache.DisabledCollectors
 
 	hostInfo               *prometheus.Desc
 	hostStatus             *prometheus.Desc
@@ -74,8 +75,9 @@ type Collector struct {
 }
 
 // New creates a collector. allowedHostLabels selects which Servers.com host
-// labels become label_* Prometheus labels; "*" allows all of them.
-func New(store *cache.Store, allowedHostLabels []string) *Collector {
+// labels become label_* Prometheus labels; "*" allows all of them. Metrics of
+// disabled collectors are not exposed.
+func New(store *cache.Store, allowedHostLabels []string, disabled cache.DisabledCollectors) *Collector {
 	hostDesc := func(name, help string, extra ...string) *prometheus.Desc {
 		labels := append(append([]string{}, hostLabelNames...), extra...)
 		return prometheus.NewDesc(prometheus.BuildFQName(namespace, "host", name), help, labels, nil)
@@ -87,6 +89,7 @@ func New(store *cache.Store, allowedHostLabels []string) *Collector {
 	return &Collector{
 		store:      store,
 		hostLabels: newLabelMapper(allowedHostLabels),
+		disabled:   disabled,
 
 		hostInfo: hostDesc("info", "Dedicated server attributes from the server list.",
 			"rack_id", "type", "configuration", "public_ipv4", "private_ipv4", "oob_ipv4", "lease_start"),
@@ -129,7 +132,8 @@ func New(store *cache.Store, allowedHostLabels []string) *Collector {
 			"Whether the uplink ports are aggregated on the switch side: redundant uplink without the disaggregated_*_ports feature.",
 			"uplink"),
 		hostDetailsLastRefresh: hostDesc("details_last_refresh_timestamp_seconds",
-			"Unix time the per-server details were last downloaded."),
+			"Unix time a per-server collector was last fetched.",
+			"collector"),
 
 		l2SegmentInfo: desc("l2_segment_info", "L2 segment attributes.",
 			"segment_id", "segment", "type", "status", "location_group"),
@@ -164,13 +168,17 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.collectHostDetails(ch, snapshot, host, common)
 		}
 	}
-	c.collectL2Segments(ch, snapshot)
+	if c.enabled(cache.CollectorL2Segments) {
+		c.collectL2Segments(ch, snapshot)
+	}
 	c.collectReference(ch, snapshot)
 
 	for resource, ts := range snapshot.LastSuccess {
 		gauge(ch, c.refreshLastSuccess, float64(ts.Unix()), string(resource))
 	}
 }
+
+func (c *Collector) enabled(name cache.Collector) bool { return c.disabled.Enabled(name) }
 
 // commonHostLabels returns values for hostLabelNames.
 func (c *Collector) commonHostLabels(snapshot *cache.Snapshot, server api.DedicatedServer) []string {
@@ -201,7 +209,11 @@ func (c *Collector) collectHost(ch chan<- prometheus.Metric, s api.DedicatedServ
 
 func (c *Collector) collectHostDetails(ch chan<- prometheus.Metric, snapshot *cache.Snapshot, host *cache.Host, common []string) {
 	d := host.Details
-	gauge(ch, c.hostDetailsLastRefresh, float64(d.FetchedAt.Unix()), common...)
+	for collector, ts := range d.Fetched {
+		if c.enabled(collector) {
+			gauge(ch, c.hostDetailsLastRefresh, float64(ts.Unix()), with(common, string(collector))...)
+		}
+	}
 
 	if cfg := d.Configuration; cfg != nil {
 		gauge(ch, c.hostConfigurationInfo, 1, with(common, cfg.ServerModelName, cfg.OperatingSystemFullName,
@@ -209,7 +221,43 @@ func (c *Collector) collectHostDetails(ch chan<- prometheus.Metric, snapshot *ca
 		gauge(ch, c.hostRAMSize, float64(cfg.RAMSize), common...)
 	}
 
-	for _, slot := range d.DriveSlots {
+	if c.enabled(cache.CollectorDrives) {
+		c.collectDrives(ch, d.DriveSlots, common)
+	}
+	if c.enabled(cache.CollectorPorts) {
+		c.collectConnections(ch, d.Connections, common)
+	}
+	if c.enabled(cache.CollectorNetworks) {
+		for _, n := range d.Networks {
+			gauge(ch, c.hostNetworkInfo, 1, with(common, n.ID, n.Title, n.Family, n.InterfaceType, n.CIDR,
+				n.Status, n.DistributionMethod, strconv.FormatBool(n.Additional))...)
+		}
+	}
+
+	features := map[string]bool{}
+	if c.enabled(cache.CollectorFeatures) {
+		for _, f := range d.Features {
+			enabled := f.Status == featureStatusActivated
+			features[f.Name] = enabled
+			gauge(ch, c.hostFeatureStatus, 1, with(common, f.Name, f.Status)...)
+			gauge(ch, c.hostFeatureEnabled, boolValue(enabled), with(common, f.Name)...)
+		}
+	}
+
+	if c.enabled(cache.CollectorPowerFeeds) {
+		for _, feed := range d.PowerFeeds {
+			gauge(ch, c.hostPowerFeedStatus, 1, with(common, feed.Name, feed.Type, feed.Status)...)
+			gauge(ch, c.hostPowerFeedUp, boolValue(feed.Status == powerFeedOn), with(common, feed.Name)...)
+		}
+	}
+
+	if c.enabled(cache.CollectorUplinks) {
+		c.collectUplinks(ch, snapshot, host, features, common)
+	}
+}
+
+func (c *Collector) collectDrives(ch chan<- prometheus.Metric, slots []api.DriveSlot, common []string) {
+	for _, slot := range slots {
 		position := strconv.Itoa(slot.Position)
 		model, mediaType := "", ""
 		if slot.DriveModel != nil {
@@ -219,39 +267,23 @@ func (c *Collector) collectHostDetails(ch chan<- prometheus.Metric, snapshot *ca
 		gauge(ch, c.hostDriveSlotInfo, 1, with(common, position, slot.Interface, slot.FormFactor,
 			strconv.FormatBool(slot.DriveModel != nil), model, mediaType)...)
 	}
+}
 
+func (c *Collector) collectConnections(ch chan<- prometheus.Metric, connections []api.Connection, common []string) {
 	connectionsByType := map[string]int{}
-	for _, conn := range d.Connections {
+	for _, conn := range connections {
 		connectionsByType[conn.Type]++
 		gauge(ch, c.hostConnectionInfo, 1, with(common, conn.Port, conn.Type, conn.MACAddress)...)
 	}
 	for connType, count := range connectionsByType {
 		gauge(ch, c.hostConnections, float64(count), with(common, connType)...)
 	}
-
-	for _, n := range d.Networks {
-		gauge(ch, c.hostNetworkInfo, 1, with(common, n.ID, n.Title, n.Family, n.InterfaceType, n.CIDR,
-			n.Status, n.DistributionMethod, strconv.FormatBool(n.Additional))...)
-	}
-
-	features := map[string]bool{}
-	for _, f := range d.Features {
-		enabled := f.Status == featureStatusActivated
-		features[f.Name] = enabled
-		gauge(ch, c.hostFeatureStatus, 1, with(common, f.Name, f.Status)...)
-		gauge(ch, c.hostFeatureEnabled, boolValue(enabled), with(common, f.Name)...)
-	}
-
-	for _, feed := range d.PowerFeeds {
-		gauge(ch, c.hostPowerFeedStatus, 1, with(common, feed.Name, feed.Type, feed.Status)...)
-		gauge(ch, c.hostPowerFeedUp, boolValue(feed.Status == powerFeedOn), with(common, feed.Name)...)
-	}
-
-	c.collectUplinks(ch, snapshot, host, features, common)
 }
 
 // collectUplinks combines the uplink model (is it redundant?) with the
 // disaggregation features (was the LAG split?) into the aggregation state.
+// Without the features collector the aggregation state is unknown and
+// serverscom_host_uplink_aggregated is not exposed.
 func (c *Collector) collectUplinks(ch chan<- prometheus.Metric, snapshot *cache.Snapshot, host *cache.Host, features map[string]bool, common []string) {
 	cfg := host.Details.Configuration
 	if cfg == nil {
@@ -278,6 +310,9 @@ func (c *Collector) collectUplinks(ch chan<- prometheus.Metric, snapshot *cache.
 
 		gauge(ch, c.hostUplinkInfo, 1, with(common, uplink.name, model.Name, strconv.Itoa(model.Speed))...)
 		gauge(ch, c.hostUplinkRedundant, boolValue(model.Redundancy), with(common, uplink.name)...)
+		if !c.enabled(cache.CollectorFeatures) {
+			continue
+		}
 		aggregated := model.Redundancy && !features[uplink.disaggregated]
 		gauge(ch, c.hostUplinkAggregated, boolValue(aggregated), with(common, uplink.name)...)
 	}

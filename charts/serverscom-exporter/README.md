@@ -67,11 +67,11 @@ defaults. Other flags go to `extraArgs`.
 | `config.requestsPerHour` | `--api.requests-per-hour` |
 | `config.ratelimitReserve` | `--api.ratelimit-reserve` |
 | `config.refresh.hostsInterval` | `--refresh.hosts-interval` |
-| `config.refresh.detailsInterval` | `--refresh.details-interval` |
-| `config.refresh.featuresInterval` | `--refresh.features-interval` |
-| `config.refresh.l2Interval` | `--refresh.l2-interval` |
+| `config.refresh.<collector>Interval` | `--refresh.<collector>-interval`: a duration or `auto` (configuration, drives, ports, networks, features, powerFeeds, uplinks, l2Segments, reference) |
+| `config.refresh.autoMinInterval`, `autoMaxInterval` | `--refresh.auto-min-interval`, `--refresh.auto-max-interval` |
 | `config.refresh.referenceInterval` | `--refresh.reference-interval` |
 | `config.hostLabels` | `--collector.host-labels` |
+| `config.collectors.<name>` | `--no-collector.<name>` when `false` (drives, ports, networks, features, power-feeds, uplinks, l2-segments) |
 | `config.apiUrl`, `apiTimeout`, `apiPageSize` | `--api.url`, `--api.timeout`, `--api.page-size` |
 | `config.cacheSaveInterval` | `--cache.save-interval` |
 | `config.metricsPath` | `--web.telemetry-path` |

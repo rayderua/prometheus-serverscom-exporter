@@ -15,7 +15,7 @@ import (
 
 // fileFormatVersion is bumped on incompatible changes of the cache file;
 // files with another version are ignored on load.
-const fileFormatVersion = 1
+const fileFormatVersion = 2
 
 // Store publishes snapshots and optionally persists them to disk, so that a
 // restart does not have to download everything again.

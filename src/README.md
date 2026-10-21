@@ -12,13 +12,20 @@ the CLI and everything else using the same account. The exporter therefore
 never calls the API during a scrape. Background loops keep an in-memory cache,
 and `/metrics` only renders the current snapshot.
 
-| Loop      | Data                                                         | Default interval                              |
-|-----------|--------------------------------------------------------------|-----------------------------------------------|
-| hosts     | server list: statuses, power, labels, `updated_at`            | `--refresh.hosts-interval=2m`                 |
-| details   | drives, ports, networks, features, power feeds, configuration | `--refresh.details-interval=12h`, or as soon as `updated_at` changes |
-| features  | server features only (port aggregation, OOB public access)    | `--refresh.features-interval=1h`, one request per server |
-| l2        | L2 segments, members, networks                                | `--refresh.l2-interval=15m`                   |
-| reference | locations, racks, uplink model catalogues                     | `--refresh.reference-interval=24h`            |
+| Loop          | Data                                                        | Default interval |
+|---------------|-------------------------------------------------------------|------------------|
+| hosts         | server list; new and changed servers are downloaded fully   | `2m`, fixed      |
+| configuration | server model, RAM, uplinks                                  | `auto`           |
+| drives, ports, networks, power-feeds | per-server sub-resources             | `auto`           |
+| features      | port aggregation, OOB public access                         | `auto`           |
+| uplinks, l2-segments, reference | uplink catalogues, L2 segments, locations and racks | `auto`  |
+
+Each is set with `--refresh.<name>-interval`: a duration or `auto`. Auto
+collectors share one interval: the budget left after the fixed ones (80% of
+`--api.requests-per-hour` minus fixed requests per hour) divided by their
+cost, rounded up to 5 minutes, within `--refresh.auto-min-interval` and
+`--refresh.auto-max-interval`. Per-server collectors spread their requests
+evenly over the interval.
 
 ### Request limits
 
@@ -89,7 +96,7 @@ labels, so dashboards can filter by location and rack without joins.
 | `serverscom_host_power_feed_status` / `_power_feed_up` | Power feeds |
 | `serverscom_host_uplink_info` / `_uplink_redundant` | Uplink model, speed, redundancy |
 | `serverscom_host_uplink_aggregated` | 1 if the uplink is redundant and not disaggregated, i.e. aggregated on the switch side |
-| `serverscom_host_details_last_refresh_timestamp_seconds` | When the server details were fetched |
+| `serverscom_host_details_last_refresh_timestamp_seconds` | When a per-server collector was last fetched, by `collector` |
 | `serverscom_l2_segment_info`, `_member_info`, `_network_info` | L2 segments, attached servers (mode, VLAN), networks |
 | `serverscom_location_info`, `serverscom_rack_info` | Reference data for dashboard variables |
 | `serverscom_exporter_last_refresh_success_timestamp_seconds` | Cache freshness by resource |
@@ -117,9 +124,9 @@ label_values(serverscom_host_info{location=~"$location"}, rack)
   assume an enabled feature reports `activated`.
 - Units of `ram_size` and drive `capacity` (most likely GB).
 - Whether `updated_at` changes when drives or ports change. If it does not,
-  lower `--refresh.details-interval`. (Toggling a feature, e.g. port
-  disaggregation, does **not** change it; the features loop covers that.)
-- The maximum `per_page` value.
+  set a fixed `--refresh.drives-interval` / `--refresh.ports-interval`. (Toggling
+  a feature, e.g. port disaggregation, does **not** change it;
+  `--refresh.features-interval` covers that.)
 
 ## Development
 

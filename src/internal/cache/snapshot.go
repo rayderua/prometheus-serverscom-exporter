@@ -14,17 +14,17 @@ import (
 	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/api"
 )
 
-// Resource names a group of cached data refreshed together.
+// Resource names a group of cached data refreshed together. Besides the
+// constants below, every Collector is a resource: Resource(collector).
 type Resource string
 
 const (
-	ResourceHosts       Resource = "hosts"
+	// ResourceHosts is the server list.
+	ResourceHosts Resource = "hosts"
+
+	// ResourceHostDetails is the download of all collectors of new and
+	// changed servers.
 	ResourceHostDetails Resource = "host_details"
-	ResourceFeatures    Resource = "host_features"
-	ResourceL2Segments  Resource = "l2_segments"
-	ResourceLocations   Resource = "locations"
-	ResourceRacks       Resource = "racks"
-	ResourceUplinks     Resource = "uplink_models"
 )
 
 // Snapshot is a point-in-time view of the account.
@@ -63,11 +63,13 @@ type Host struct {
 
 // HostDetails are per-server sub-resources that rarely change.
 type HostDetails struct {
-	// FetchedAt is when the details were downloaded.
-	FetchedAt time.Time `json:"fetched_at"`
+	// Fetched holds when each of HostCollectors was last fetched. A missing
+	// entry (e.g. a collector turned on again) is fetched first.
+	Fetched map[Collector]time.Time `json:"fetched"`
 
-	// SourceUpdatedAt is the server's updated_at at download time. When the
-	// list reports a different updated_at, the details are refreshed early.
+	// SourceUpdatedAt is the server's updated_at when all collectors were
+	// last downloaded together. When the list reports a different
+	// updated_at, the server is downloaded again right away.
 	SourceUpdatedAt time.Time `json:"source_updated_at"`
 
 	Configuration *api.ConfigurationDetails `json:"configuration,omitempty"`

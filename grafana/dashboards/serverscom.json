@@ -4424,7 +4424,7 @@
         "spec": {
           "id": 40,
           "title": "Refresh intervals",
-          "description": "Configured and recommended refresh interval per loop (0 = disabled) and the requests per hour it needs. Recommended differs from configured only when the demand does not fit into the account limit minus the reserve.",
+          "description": "Effective refresh interval per loop (auto intervals as computed from the budget), whether it is auto or fixed, the recommended interval and the requests per hour it needs. Recommended differs from the effective interval only when fixed intervals do not fit into the account limit minus the reserve.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4492,6 +4492,27 @@
                     "refId": "C",
                     "hidden": false
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (loop) (serverscom_exporter_refresh_interval_auto)",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    },
+                    "refId": "D",
+                    "hidden": false
+                  }
                 }
               ],
               "transformations": [
@@ -4526,13 +4547,15 @@
                         "loop": "Loop",
                         "Value #A": "Interval",
                         "Value #B": "Recommended",
-                        "Value #C": "Requests / h"
+                        "Value #C": "Requests / h",
+                        "Value #D": "Mode"
                       },
                       "indexByName": {
                         "loop": 0,
                         "Value #A": 1,
-                        "Value #B": 2,
-                        "Value #C": 3
+                        "Value #D": 2,
+                        "Value #B": 3,
+                        "Value #C": 4
                       }
                     }
                   }
@@ -4616,6 +4639,32 @@
                       {
                         "id": "decimals",
                         "value": 1
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Mode"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "0": {
+                                "text": "fixed",
+                                "index": 0
+                              },
+                              "1": {
+                                "text": "auto",
+                                "index": 1
+                              }
+                            }
+                          }
+                        ]
                       }
                     ]
                   }

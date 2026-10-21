@@ -84,6 +84,21 @@ must expose that label, which it does with the default
 | `ServerscomExporterIntervalsTooShort` | warning | 30m | Servers.com <loop> refresh interval is too short for the account limit |
 | `ServerscomAPIRateLimitLow` | warning | 5m | Servers.com account is close to its API rate limit |
 
+Alerts built on the metrics of a disabled collector (`--no-collector.<name>`)
+never fire, because the metrics are not exposed:
+
+| Collector | Silent alerts |
+|---|---|
+| `drives` | `ServerscomHostDrivesMissing` |
+| `features` | `ServerscomUplinkDisaggregated` (it needs `serverscom_host_uplink_aggregated`), `ServerscomFeatureStuck`, `ServerscomOOBPublicAccessEnabled` |
+| `uplinks` | `ServerscomUplinkDisaggregated` |
+| `power-feeds` | `ServerscomPowerFeedDown` |
+| `l2-segments` | `ServerscomL2SegmentNotActive`, `ServerscomL2MemberNotActive` |
+
+How fast the host alerts fire also depends on the collector's refresh
+interval: with `auto` it follows the request budget. To catch a split port
+aggregation within a known time, set a fixed `--refresh.features-interval`.
+
 `ServerscomFeatureStuck` treats statuses ending in `ation` (`activation`,
 `deactivation`) as transitional; only `activation` is confirmed (by the official
 Go client fixtures), the rest is assumed.

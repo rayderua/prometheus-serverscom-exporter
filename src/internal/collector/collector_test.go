@@ -25,7 +25,7 @@ func testStore() *cache.Store {
 				PowerStatus: "powered_on", Labels: map[string]string{"env": "prod", "k8s.role": "worker"},
 			},
 			Details: &cache.HostDetails{
-				FetchedAt:     time.Unix(1000, 0),
+				Fetched:       map[cache.Collector]time.Time{cache.CollectorConfiguration: time.Unix(1000, 0)},
 				Configuration: &api.ConfigurationDetails{ServerModelID: 7, PublicUplinkID: 1, PrivateUplinkID: 2},
 				Features: []api.Feature{
 					{Name: "disaggregated_private_ports", Status: "activated"},
@@ -51,7 +51,7 @@ func testStore() *cache.Store {
 }
 
 func TestHostMetrics(t *testing.T) {
-	c := New(testStore(), []string{"*"})
+	c := New(testStore(), []string{"*"}, nil)
 
 	expected := `
 # HELP serverscom_host_powered_on Whether the server is powered on (1) or not (0).
@@ -83,7 +83,7 @@ serverscom_host_feature_enabled{feature="oob_public_access",host_id="h1",locatio
 }
 
 func TestHostLabelAllowlist(t *testing.T) {
-	c := New(testStore(), []string{"env"})
+	c := New(testStore(), []string{"env"}, nil)
 
 	expected := `
 # HELP serverscom_host_labels Servers.com labels of the server as label_* labels.
@@ -96,9 +96,30 @@ serverscom_host_labels{host_id="h2",label_env="",location="ams1",rack="unknown-r
 	}
 }
 
+func TestDisabledCollectorsAreNotExposed(t *testing.T) {
+	c := New(testStore(), []string{"*"}, cache.DisabledCollectors{
+		cache.CollectorDrives: true, cache.CollectorFeatures: true,
+	})
+
+	// Without features the aggregation state is unknown; the uplink model is still exposed.
+	expected := `
+# HELP serverscom_host_uplink_redundant Whether the uplink model provides redundant (aggregatable) links (1) or a single link (0).
+# TYPE serverscom_host_uplink_redundant gauge
+serverscom_host_uplink_redundant{host_id="h1",location="ams1",rack="R01",title="node-1",uplink="private"} 1
+serverscom_host_uplink_redundant{host_id="h1",location="ams1",rack="R01",title="node-1",uplink="public"} 1
+`
+	err := testutil.CollectAndCompare(c, strings.NewReader(expected),
+		"serverscom_host_uplink_redundant", "serverscom_host_uplink_aggregated",
+		"serverscom_host_drive_slot_info", "serverscom_host_drive_capacity",
+		"serverscom_host_feature_enabled", "serverscom_host_feature_status")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCollectorIsConsistent(t *testing.T) {
 	// CollectAndLint catches duplicate series and inconsistent label sets.
-	problems, err := testutil.CollectAndLint(New(testStore(), []string{"*"}))
+	problems, err := testutil.CollectAndLint(New(testStore(), []string{"*"}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -128,6 +128,11 @@ func (c *Client) BudgetPerHour() int {
 	return c.budget.limit
 }
 
+// BudgetRemaining returns the requests left in the current budget window.
+func (c *Client) BudgetRemaining() int {
+	return c.budget.state(time.Now()).Remaining
+}
+
 // RateLimit returns the last account-wide rate limit state seen in responses.
 func (c *Client) RateLimit() RateLimit {
 	c.mu.Lock()

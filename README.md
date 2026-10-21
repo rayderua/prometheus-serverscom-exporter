@@ -27,6 +27,7 @@ that Terraform, the CLI and other users of the account are not starved.
 - [Development](#development)
 - [CI and releases](#ci-and-releases)
 - [Known gaps](#known-gaps)
+- [Changelog](CHANGELOG.md)
 
 ## Repository layout
 
@@ -43,7 +44,7 @@ that Terraform, the CLI and other users of the account are not starved.
 flowchart LR
     API[(Servers.com API<br/>2000 req/h per account)]
     subgraph exporter [serverscom-exporter]
-        L[Refresh loops<br/>hosts · details · features · l2 · reference]
+        L[Refresh loops<br/>hosts · one per collector]
         B{Request budget<br/>and account reserve}
         C[(In-memory cache)]
         F[/cache.json/]
@@ -72,17 +73,47 @@ flowchart LR
 - **Single instance.** Run one exporter per account: every replica spends the
   same account limit.
 
+Every collector (API endpoint) has its own interval,
+`--refresh.<collector>-interval`: a fixed duration or `auto`.
+
 | Loop | Data | Default interval | Cost per run |
 |------|------|------------------|--------------|
-| hosts | server list: statuses, power, labels, `updated_at` | `2m` | 1 request per 100 servers (page size) |
-| details | drives, ports, networks, features, power feeds, configuration | `12h`, or as soon as a server's `updated_at` changes | 6 requests per server |
-| features | server features only | `1h` (`0` disables) | 1 request per server |
-| l2 | L2 segments, members, networks | `15m` | 1 page + 2 requests per segment |
-| reference | locations, racks, uplink model catalogues | `24h` | a few requests |
+| hosts | server list: statuses, power, labels, `updated_at`; then all collectors of new servers and servers whose `updated_at` changed | `2m`, always fixed | 1 request per 100 servers (page size) |
+| configuration | server model, RAM, uplinks (`GET /hosts/dedicated_servers/{id}`) | `auto` | 1 request per server |
+| drives | drive slots | `auto` | 1 request per server |
+| ports | switch port connections | `auto` | 1 request per server |
+| networks | IP networks | `auto` | 1 request per server |
+| features | port aggregation, OOB public access | `auto` | 1 request per server |
+| power-feeds | power feeds | `auto` | 1 request per server |
+| uplinks | uplink model catalogues of the server models in use | `auto` | 1 request per model and location |
+| l2-segments | L2 segments, members, networks | `auto` | 1 page + 2 requests per segment |
+| reference | locations, racks | `auto` | 2 requests |
 
-The features loop exists because toggling a feature (e.g. port
-disaggregation) does not change `updated_at`, so the details loop would not
-notice it for up to 12 hours.
+Per-server collectors refresh the server with the oldest data first and
+spread requests evenly over the interval (one server every
+`interval / servers`), so there are no bursts. Toggling a feature (e.g.
+splitting the port aggregation) does not change `updated_at`; if you need to
+catch it within a fixed time, set `--refresh.features-interval`, e.g. `15m`.
+
+### Auto intervals
+
+All `auto` collectors share one interval, computed from the budget left after
+the fixed ones:
+
+```
+auto interval = auto requests per run / (budget × 80% − fixed requests per hour)
+```
+
+It is rounded up to 5 minutes, kept within `--refresh.auto-min-interval`
+(`5m`) and `--refresh.auto-max-interval` (`24h`), and recomputed when the
+number of servers or segments changes. The other 20% of the budget is left
+for new and changed servers and retries. When the budget window has 20% or
+less left, auto collectors pause until the reset and fixed ones keep running,
+so a critical collector such as `features` is not starved by the others.
+
+The effective intervals are logged (`Refresh intervals computed
+auto_interval=...`) and exposed as `serverscom_exporter_refresh_interval_seconds`
+and `serverscom_exporter_refresh_interval_auto`.
 
 ## Quick start
 
@@ -173,22 +204,48 @@ file are given.
 |------|---------|-------------|
 | `--api.url` (`SERVERSCOM_API_URL`) | `https://api.servers.com/v1` | API base URL |
 | `--api.timeout` | `30s` | Timeout of a single request |
-| `--api.page-size` | `100` | `per_page` for collection endpoints |
+| `--api.page-size` | `100` | `per_page` for collection endpoints, 1–100 (the API maximum) |
 | `--api.requests-per-hour` | `1000` | Exporter's own hourly request budget |
 | `--api.ratelimit-reserve` | `300` | Pause when the account-wide remaining requests drop to this value |
-| `--refresh.hosts-interval` | `2m` | Server list (power, statuses, labels) |
-| `--refresh.details-interval` | `12h` | Maximum age of per-server details; changed servers are refreshed earlier |
-| `--refresh.features-interval` | `1h` | Server features for all servers; `0` disables |
-| `--refresh.l2-interval` | `15m` | L2 segments with members and networks |
-| `--refresh.reference-interval` | `24h` | Locations, racks, uplink models |
+| `--refresh.hosts-interval` | `2m` | Server list; new and changed servers are downloaded on the same schedule |
+| `--refresh.<collector>-interval` | `auto` | Interval of a collector: a duration or `auto`, see [How it works](#how-it-works) |
+| `--refresh.auto-min-interval` | `5m` | Lower bound of the auto interval |
+| `--refresh.auto-max-interval` | `24h` | Upper bound of the auto interval |
 | `--cache.file` | empty (off) | File to persist the cache to |
 | `--cache.save-interval` | `1m` | How often to write the cache file if it changed |
 | `--collector.host-labels` | `*` | Servers.com label keys exposed in `serverscom_host_labels`, comma-separated; `*` for all |
+| `--[no-]collector.<name>` | on | Optional collectors, see [Collectors](#collectors) |
 | `--web.listen-address` | `:9920` | Listen address; repeatable |
 | `--web.telemetry-path` | `/metrics` | Metrics path |
 | `--web.config.file` | empty | TLS and basic auth, see below |
 | `--log.level` | `info` | `debug`, `info`, `warn`, `error` |
 | `--log.format` | `logfmt` | `logfmt` or `json` |
+
+### Collectors
+
+Optional data can be turned off with `--no-collector.<name>`. A disabled
+collector is neither fetched from the API nor exposed, which saves requests;
+its data is dropped from the cache file on start.
+
+| Collector | Metrics | API requests |
+|-----------|---------|--------------|
+| `drives` | `serverscom_host_drive_slot_info`, `_drive_capacity` | one per server and details refresh |
+| `ports` | `serverscom_host_connection_info`, `_connections` | one per server and details refresh |
+| `networks` | `serverscom_host_network_info` | one per server and details refresh |
+| `features` | `serverscom_host_feature_status`, `_feature_enabled`; also the features loop | one per server and details refresh, plus the features loop |
+| `power-feeds` | `serverscom_host_power_feed_status`, `_power_feed_up` | one per server and details refresh |
+| `uplinks` | `serverscom_host_uplink_info`, `_uplink_redundant`, `_uplink_aggregated` | one per server model and location, daily |
+| `l2-segments` | `serverscom_l2_segment_*` | the L2 loop |
+
+`serverscom_host_uplink_aggregated` also needs `features`; without it the
+metric is not exposed. When a collector is turned on again, servers whose
+cached details lack it are refreshed on the next check.
+
+```sh
+--no-collector.drives --no-collector.features --no-collector.l2-segments
+```
+
+In the Helm chart: `config.collectors.<name>: false`.
 
 ### HTTP endpoints
 
@@ -240,50 +297,50 @@ Interrupted loops resume where they stopped; cached data is kept meanwhile.
 
 ### Demand estimate
 
-From the number of servers, segments and racks the exporter estimates how
-many requests per hour the configured intervals need and how many a full
+From the number of servers, segments and racks the exporter computes the
+auto interval, how many requests per hour each loop needs and how many a full
 download costs (a start without a cache file). It exposes the estimate as
-metrics and logs a recommendation whenever it changes:
+metrics and logs it whenever it changes. A warning with flags to change is
+logged when the fixed intervals, or the auto collectors even at
+`--refresh.auto-max-interval`, do not fit:
 
 ```
-level=WARN msg="API demand does not fit into the request budget; the exporter will wait for budget resets"
-  requests_per_hour=538 full_refresh_requests=243 budget_per_hour=500 ... recommended="--api.requests-per-hour=700"
+level=WARN msg="Auto collectors do not fit into the request budget even at the maximum interval; raise the budget or the fixed intervals"
+  auto_interval=24h fixed_requests_per_hour=780 budget_per_hour=1000 ... recommended="--api.requests-per-hour=1100"
 ```
 
-The recommended budget is the steady-state demand plus 25% headroom, at least
-one full download, and at most the account limit minus the reserve. If even
-that does not fit, the recommended intervals are raised proportionally.
+The recommended budget fits the fixed loops and the auto ones at the maximum
+interval into 80% of it, covers one full download, and is at most the account
+limit minus the reserve. If even that does not fit, the recommended fixed
+intervals are raised proportionally.
 
 ### Example
 
-100 servers, 10 L2 segments, default intervals:
+100 servers, 10 L2 segments, budget 1000, default intervals:
 
-| Loop | Requests per run | Requests per hour |
-|------|------------------|-------------------|
-| hosts | 1 | 30 |
-| details | 600 | 50 |
-| features | 100 | 100 |
-| l2 | 21 | 84 |
-| reference | ~5 | ~0 |
-| **Total** | full download ≈ 630 | ≈ 265 |
+| Loop | Interval | Requests per run | Requests per hour |
+|------|----------|------------------|-------------------|
+| hosts | `2m` | 1 | 30 |
+| configuration, drives, ports, networks, features, power-feeds | auto: `50m` | 6 × 100 | 720 |
+| l2-segments, uplinks, reference | auto: `50m` | ~26 | ~31 |
+| **Total** | | full download ≈ 630 | ≈ 780 |
 
-Both fit into the default budget of 1000: a start without a cache downloads
-everything within the first hour, then the exporter uses about a quarter of
-its budget. With the default reserve of 300, the exporter's budget leaves at
-least 700 requests per hour to other users of the account.
+The hosts loop takes 30 requests per hour, leaving 1000 × 80% − 30 = 770 for
+auto collectors; their 626 requests per run then take 49 minutes, rounded up
+to `50m`. With 200 servers it is about `1h40m`.
 
-At about 160 servers a full download no longer fits into 1000 requests; the
-exporter then recommends a larger `--api.requests-per-hour` (up to 1700, the
-account limit minus the reserve) or longer intervals. With a persisted cache
-a full download happens only once.
+With `--refresh.features-interval=15m` features become fixed at 400 requests
+per hour, leaving 370 for the rest: the auto interval grows to `1h30m`. With
+200 servers features every `15m` alone take 800 requests per hour, all of the
+80% share: auto collectors fall back to `--refresh.auto-max-interval` and the
+exporter warns and recommends a larger budget or a longer features interval.
 
 Ways to lower the demand, by impact:
 
-- raise `--refresh.features-interval` or set it to `0` if you do not need
-  feature changes faster than `--refresh.details-interval`;
-- raise `--refresh.l2-interval` if you have many segments;
-- raise `--refresh.details-interval`: changed servers are still refreshed
-  right away;
+- turn off collectors you do not use (`--no-collector.<name>`): every
+  per-server collector costs one request per server and refresh;
+- raise the fixed intervals, `--refresh.features-interval` first: they are
+  paid before auto collectors get anything;
 - keep `--cache.file` so restarts do not download everything again.
 
 Useful queries:
@@ -379,7 +436,8 @@ config:
   requestsPerHour: 1200
   hostLabels: env,team,role
   refresh:
-    featuresInterval: 2h
+    featuresInterval: 30m
+    drivesInterval: 24h
 serviceMonitor:
   enabled: true
   labels:
@@ -432,8 +490,8 @@ budget and account limit.
 | `Exporter request budget is used up, waiting for the hourly reset` | Demand exceeds `--api.requests-per-hour`. Follow the `recommended=` flags in the warning or see [sizing](#api-rate-limits-and-sizing). Can happen once on a start without a cache with many servers. |
 | `Account rate limit reserve reached, pausing API requests` | Other API users (Terraform, CLI, another exporter) use most of the account limit. Check for a second exporter replica; lower the exporter's demand or the reserve. |
 | `serverscom_api_requests_total{code="429"}` | The account limit was hit; the exporter pauses until the reset. |
-| Drives or ports change late | Details are refreshed when `updated_at` changes or after `--refresh.details-interval`. If the API does not bump `updated_at` for such changes, lower the interval. |
-| Port aggregation / OOB access changes late | Feature changes do not bump `updated_at`; they are picked up by the features loop (`--refresh.features-interval`). |
+| Drives or ports change late | Servers are downloaded again when `updated_at` changes, otherwise on their collector's interval. Check `serverscom_exporter_refresh_interval_seconds`; set a fixed `--refresh.<collector>-interval` or raise the budget. |
+| Port aggregation / OOB access changes late | Feature changes do not bump `updated_at`; they are picked up on the features interval (see `serverscom_exporter_refresh_interval_seconds{loop="features"}`). Set a fixed `--refresh.features-interval` to bound the delay. |
 | `Cannot save cache` | The cache directory is not writable by uid 65532. Fix the volume permissions (the chart sets `fsGroup`). |
 | Kubernetes probes fail with basic auth | Basic auth also covers `/-/healthy`; set `probes.type: tcpSocket` in the chart. |
 
@@ -454,6 +512,8 @@ release), Docker with buildx, Helm 3.8+ or 4, and for some checks
 | Known vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | `src/` |
 | Image smoke test | `test/smoke.sh <image>` | `src/` |
 | Binary smoke test | `EXPORTER_BIN=./serverscom-exporter test/smoke.sh` | `src/` |
+| Upgrade test | `PREVIOUS=<previous image or binary>` with either of the above | `src/` |
+| Update the golden series list | `UPDATE_GOLDEN=1` with either of the above | `src/` |
 | Chart lint | `helm lint --strict charts/serverscom-exporter --set apiToken.value=test` | repo root |
 | Chart unit tests | `helm unittest charts/serverscom-exporter` | repo root |
 | Alert rule tests | `promtool test rules grafana/alerts/tests/*.test.yml` | repo root |
@@ -461,9 +521,26 @@ release), Docker with buildx, Helm 3.8+ or 4, and for some checks
 The **smoke test** starts [`src/test/mockapi`](src/test/mockapi/main.go), a
 fake Servers.com API with two servers and one L2 segment, runs the exporter
 image (or a local binary) against it with `--api.page-size=1` to exercise
-pagination, and checks `/-/healthy` and the main metrics. Then it stops the
-API, restarts the exporter and checks that the same data is served from the
-cache file. The mock is handy for local development as well:
+pagination, and checks:
+
+1. `/-/healthy`, the main metrics and the absence of API and refresh errors;
+2. **regressions in the exposed series**: every metric name with its labels
+   (values dropped, see [`test/metrics-shape.sh`](src/test/metrics-shape.sh))
+   must match [`test/golden/metrics-shape.txt`](src/test/golden/metrics-shape.txt).
+   An intended change of metrics or labels updates the file with
+   `UPDATE_GOLDEN=1`, and the diff shows up in review;
+3. after a restart with the API down, the same data is served from the cache
+   file;
+4. with `--no-collector.drives`, `features` and `l2-segments` and a fixed
+   `--refresh.ports-interval`, their metrics and refresh timestamps are gone,
+   `uplink_aggregated` is not exposed, the rest is served.
+
+With `PREVIOUS` it first runs the previous release, which fills the cache
+file, and then requires the new version to serve exactly the same inventory
+(server, L2 and reference series with values) after the upgrade. CI passes
+the image of the last stable `v*` tag.
+
+The mock is handy for local development as well:
 
 ```sh
 cd src
@@ -546,5 +623,4 @@ Some API details are not yet verified against the live API (full list in
 - the full set of feature `status` values (`feature_enabled` and
   `uplink_aggregated` assume `activated`);
 - units of `ram_size` and drive `capacity` (most likely GB);
-- whether `updated_at` changes when drives or ports change;
-- the maximum `per_page` value.
+- whether `updated_at` changes when drives or ports change.

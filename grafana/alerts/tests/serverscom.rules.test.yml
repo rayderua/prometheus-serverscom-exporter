@@ -165,11 +165,11 @@ tests:
         values: '1x30'
       - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="hosts"}'
         values: '0x30'
-      - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="host_features"}'
+      - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="features"}'
         values: '0+60x30'
       - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="hosts"}'
         values: '120x30'
-      - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="host_features"}'
+      - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="features"}'
         values: '300x30'
       - series: 'serverscom_api_budget_exhausted{job="sc",instance="x"}'
         values: '1x30'
@@ -196,7 +196,7 @@ tests:
   # Demand above the budget, account close to its limit, rejected token.
   - interval: 1m
     input_series:
-      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="host_features"}'
+      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="features"}'
         values: '468x40'
       - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="hosts"}'
         values: '30x40'

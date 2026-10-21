@@ -34,6 +34,9 @@ import (
 
 const exporterName = "serverscom_exporter"
 
+// maxPageSize is the largest per_page the Servers.com API accepts.
+const maxPageSize = 100
+
 func main() {
 	var (
 		apiURL = kingpin.Flag("api.url", "Servers.com API base URL.").
@@ -44,23 +47,19 @@ func main() {
 				Envar("SERVERSCOM_API_TOKEN_FILE").String()
 		apiTimeout = kingpin.Flag("api.timeout", "Timeout of a single API request.").
 				Default("30s").Duration()
-		apiPageSize = kingpin.Flag("api.page-size", "Page size (per_page) for collection endpoints.").
+		apiPageSize = kingpin.Flag("api.page-size", "Page size (per_page) for collection endpoints, 1-100 (the API maximum).").
 				Default("100").Int()
 		apiBudget = kingpin.Flag("api.requests-per-hour", "Hourly request budget of this exporter. Requests are not delayed until it is used up; then the exporter waits for the hourly reset. The account limit is 2000/h and is shared with other API users.").
 				Default("1000").Int()
 		apiReserve = kingpin.Flag("api.ratelimit-reserve", "Pause when the account-wide X-RateLimit-Remaining drops to this value, leaving the rest to other API users.").
 				Default("300").Int()
 
-		hostsInterval = kingpin.Flag("refresh.hosts-interval", "How often to fetch the server list (power, statuses, labels).").
+		hostsInterval = kingpin.Flag("refresh.hosts-interval", "How often to fetch the server list (power, statuses, labels) and download new and changed servers.").
 				Default("2m").Duration()
-		detailsInterval = kingpin.Flag("refresh.details-interval", "Maximum age of per-server details (drives, ports, networks, features, power feeds). Changed servers are refreshed earlier.").
-				Default("12h").Duration()
-		featuresInterval = kingpin.Flag("refresh.features-interval", "How often to re-fetch server features (port aggregation, OOB public access) for all servers. Toggling a feature does not change updated_at. Costs one request per server; 0 disables.").
-					Default("1h").Duration()
-		l2Interval = kingpin.Flag("refresh.l2-interval", "How often to fetch L2 segments with members and networks.").
-				Default("15m").Duration()
-		referenceInterval = kingpin.Flag("refresh.reference-interval", "How often to fetch locations, racks and uplink models.").
-					Default("24h").Duration()
+		autoMinInterval = kingpin.Flag("refresh.auto-min-interval", "Lower bound of the auto refresh interval.").
+				Default("5m").Duration()
+		autoMaxInterval = kingpin.Flag("refresh.auto-max-interval", "Upper bound of the auto refresh interval.").
+				Default("24h").Duration()
 
 		cacheFile = kingpin.Flag("cache.file", "File to persist the cache to, so restarts do not refetch everything. Empty disables persistence.").
 				Default("").String()
@@ -73,6 +72,22 @@ func main() {
 				Default("/metrics").String()
 		toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9920")
 	)
+
+	// --[no-]collector.<name> for every optional collector.
+	collectorFlags := map[cache.Collector]*bool{}
+	for _, c := range cache.OptionalCollectors {
+		collectorFlags[c] = kingpin.Flag("collector."+string(c), collectorHelp[c]+" Disable with --no-collector."+string(c)+".").
+			Default("true").Bool()
+	}
+
+	// --refresh.<name>-interval for every collector: a duration or auto.
+	intervals := map[cache.Collector]refresher.Interval{}
+	intervalFlags := map[cache.Collector]*refresher.Interval{}
+	for _, c := range cache.Collectors {
+		intervalFlags[c] = &refresher.Interval{}
+		kingpin.Flag("refresh."+string(c)+"-interval", "Refresh interval of "+string(c)+": a duration or auto. "+
+			"Auto collectors share the budget left after the fixed ones.").Default("auto").SetValue(intervalFlags[c])
+	}
 
 	logConfig := &promslog.Config{}
 	promslogflag.AddFlags(kingpin.CommandLine, logConfig)
@@ -119,17 +134,36 @@ func main() {
 	store := cache.NewStore(*cacheFile, logger.With("component", "cache"))
 	store.Load()
 
-	registry.MustRegister(collector.New(store, strings.Split(*hostLabels, ",")))
+	for c, i := range intervalFlags {
+		intervals[c] = *i
+	}
+	if *apiPageSize < 1 || *apiPageSize > maxPageSize {
+		logger.Error("Invalid --api.page-size", "value", *apiPageSize, "min", 1, "max", maxPageSize)
+		os.Exit(1)
+	}
+	if *autoMinInterval <= 0 || *autoMaxInterval < *autoMinInterval {
+		logger.Error("Invalid auto interval bounds", "min", *autoMinInterval, "max", *autoMaxInterval)
+		os.Exit(1)
+	}
+
+	disabled := cache.DisabledCollectors{}
+	for c, on := range collectorFlags {
+		if !*on {
+			disabled[c] = true
+		}
+	}
+
+	registry.MustRegister(collector.New(store, strings.Split(*hostLabels, ","), disabled))
 
 	ref := refresher.New(client, store, refresher.Config{
-		HostsInterval:     *hostsInterval,
-		DetailsInterval:   *detailsInterval,
-		FeaturesInterval:  *featuresInterval,
-		L2Interval:        *l2Interval,
-		ReferenceInterval: *referenceInterval,
-		PageSize:          *apiPageSize,
-		BudgetPerHour:     *apiBudget,
-		Reserve:           *apiReserve,
+		HostsInterval:   *hostsInterval,
+		Intervals:       intervals,
+		AutoMinInterval: *autoMinInterval,
+		AutoMaxInterval: *autoMaxInterval,
+		Disabled:        disabled,
+		PageSize:        *apiPageSize,
+		BudgetPerHour:   *apiBudget,
+		Reserve:         *apiReserve,
 	}, logger.With("component", "refresher"), registry)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -170,6 +204,17 @@ func main() {
 	}
 
 	<-persisterDone // the persister saves the cache one last time on exit
+}
+
+// collectorHelp describes the optional collectors for --help.
+var collectorHelp = map[cache.Collector]string{
+	cache.CollectorDrives:     "Fetch and expose drive slots (serverscom_host_drive_*). One request per server and refresh.",
+	cache.CollectorPorts:      "Fetch and expose switch port connections (serverscom_host_connection_info, serverscom_host_connections). One request per server and refresh.",
+	cache.CollectorNetworks:   "Fetch and expose IP networks of servers (serverscom_host_network_info). One request per server and refresh.",
+	cache.CollectorFeatures:   "Fetch and expose server features (serverscom_host_feature_*). Also needed for serverscom_host_uplink_aggregated. One request per server and refresh.",
+	cache.CollectorPowerFeeds: "Fetch and expose power feeds (serverscom_host_power_feed_*). One request per server and refresh.",
+	cache.CollectorUplinks:    "Fetch uplink model catalogues and expose serverscom_host_uplink_*.",
+	cache.CollectorL2Segments: "Fetch and expose L2 segments with members and networks (serverscom_l2_segment_*).",
 }
 
 func newHTTPServer(registry *prometheus.Registry, metricsPath string, logger *slog.Logger) (*http.Server, error) {
