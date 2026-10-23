@@ -35,7 +35,8 @@ that Terraform, the CLI and other users of the account are not starved.
 |------|----------|
 | [`src/`](src/README.md) | The exporter (Go), its Dockerfile and the full metric reference |
 | [`charts/serverscom-exporter/`](charts/serverscom-exporter/README.md) | Helm chart: Deployment, cache PVC, ServiceMonitor, PrometheusRule, NetworkPolicy |
-| [`grafana/`](grafana/README.md) | Grafana dashboard (v2 resource with tabs) |
+| [`grafana/`](grafana/README.md) | Grafana dashboard (v2 resource with tabs) and alert rules |
+| [`demo/`](demo/docker-compose.yml) | Docker Compose demo: mock API, exporter, Prometheus, Grafana |
 | [`.github/workflows/`](.github/workflows) | CI and release workflows |
 
 ## How it works
@@ -527,10 +528,29 @@ a Servers.com label and the extra `--label` labels; "Show: Problems only"
 hides servers in order. Renamed servers do not show up twice; see
 [grafana/README.md](grafana/README.md).
 
-It is a Grafana **dashboard v2** resource and needs Grafana 13 or newer. v2
-dashboards cannot be provisioned from files or ConfigMaps (the Grafana
-sidecar); import it in the UI, through the API or Git Sync. Details in
+It works with Prometheus and VictoriaMetrics data sources.
+
+It is a Grafana **dashboard v2** resource and needs Grafana 13 or newer.
+Provision it from a file (or a ConfigMap with the Grafana sidecar), or import
+it in the UI, through the API or Git Sync. Details in
 [grafana/README.md](grafana/README.md).
+
+### Demo
+
+`make demo` (Docker Compose) starts the exporter against the mock API with 72
+servers in 8 racks and a fixed set of problems, Prometheus with the alert
+rules and Grafana 13 with the dashboard. No Servers.com account is needed.
+
+| | |
+|---|---|
+| Grafana (no login) | http://localhost:3000/d/serverscom-exporter |
+| Prometheus | http://localhost:9090 |
+| Exporter | http://localhost:9920/metrics |
+
+Ports are bound to localhost and can be changed with `GRAFANA_PORT`,
+`PROMETHEUS_PORT` and `EXPORTER_PORT`. `make demo-down` stops it and removes
+its data. The first data shows up within a minute; costs and drives fill in
+as the exporter downloads per-server data.
 
 ## Alerts
 

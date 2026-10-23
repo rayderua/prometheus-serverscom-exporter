@@ -8,6 +8,8 @@
 #   make image                 # Docker image $(IMAGE):$(VERSION)
 #   make chart                 # dist/serverscom-exporter-<version>.tgz
 #   make all                   # build, image and chart
+#   make demo                  # demo with the mock API, Prometheus and Grafana
+#   make demo-down             # stop the demo and remove its data
 #   make clean
 #
 # Release archives are src/dist/serverscom-exporter-<version>.<os>-<arch>.tar.gz
@@ -49,7 +51,7 @@ LDFLAGS := -s -w -X $(V).Version=$(VERSION) -X $(V).Revision=$(REVISION) \
 
 ARCHIVES := $(foreach p,$(PLATFORMS),src/dist/$(NAME)-$(VERSION).$(subst /,-,$(p)).tar.gz)
 
-.PHONY: all build dist image chart clean FORCE
+.PHONY: all build dist image chart demo demo-down clean FORCE
 
 all: build image chart
 
@@ -84,6 +86,16 @@ chart:
 	helm package $(CHART_DIR) --destination dist \
 	  $(if $(CHART_VERSION),--version $(CHART_VERSION)) \
 	  $(if $(APP_VERSION),--app-version $(APP_VERSION))
+
+# Demo in Docker, see demo/docker-compose.yml. Grafana on
+# http://localhost:3000/d/serverscom-exporter.
+DEMO := docker compose -f demo/docker-compose.yml
+
+demo:
+	$(DEMO) up -d --build
+
+demo-down:
+	$(DEMO) down -v
 
 clean:
 	rm -rf src/bin src/dist dist

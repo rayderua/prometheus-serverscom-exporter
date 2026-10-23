@@ -10,8 +10,10 @@
 | Overview | counters of servers, cost, powered off, not operational, power feeds down, split uplinks, public OOB access, scheduled releases, rescue mode; **Needs attention**, one row per problem, critical first; servers by model, rack and label |
 | Racks | one panel per rack with a row per server, see below |
 | Servers | one row per server: state, uplinks (`LAG` aggregated, `SPL` split, `SGL` single link), public OOB access, cost, then inventory |
-| Costs | prices of the current billing period by rack, model and service type, per server and per service |
-| Power & OOB, Network, Drives | details |
+| Costs | total of the current billing period (tax included), cost over time, by server model and service type, per server and per service |
+| Power & OOB | power feed states, public OOB access |
+| Network | a tile per L2 segment with its members among the selected servers, uplinks (`LAG` / `SPL` / `SGL`), L2 segment members, server networks |
+| Drives | drive slots: populated or empty, media (HDD, SSD, NVMe), model, capacity |
 | Exporter | budget and account rate limit, rate limit forecast, interval stretch, stale data, requests and demand per hour, refresh loops with configured and effective intervals and data age, errors |
 
 Variables:
@@ -22,7 +24,7 @@ Variables:
 | Show | `Problems only` hides servers in order on Racks and Servers, and racks without problems |
 | Location, Rack | location and rack; the rack list shows the number of servers |
 | Label, Value | a Servers.com label (`label_*` of `serverscom_host_labels`) and its values |
-| Server | servers that pass the filters above; `All` means all of them |
+| Server | servers that pass the filters above; `All` means all of them. `All` is `.*` and the label filter is part of every query, so queries do not grow with the number of servers |
 
 **Racks** shows one panel per rack, titled with the number of its servers,
 with a row per server: problems first, then the rest. Rows are not rack
@@ -47,6 +49,9 @@ Requirements:
 
 - Grafana 13 or newer (tabs need the new dashboard layouts, enabled by default
   since Grafana 13);
+- Prometheus or VictoriaMetrics as the data source; the queries avoid
+  `!~` on labels that may be missing, which VictoriaMetrics treats
+  differently;
 - exporter 0.2.0 or newer: the dashboard uses `serverscom_host_service_price`,
   `serverscom_exporter_refresh_interval_stretch_factor`,
   `serverscom_exporter_refresh_interval_configured_seconds` and
@@ -54,10 +59,11 @@ Requirements:
 
 ### Importing
 
-v2 dashboards are **not** loaded by file provisioning (provisioning
-`dashboards:` providers, Grafana sidecars reading ConfigMaps): those read the
-classic dashboard JSON only. Use one of:
+Use one of:
 
+- file provisioning: a `dashboards:` provider of `type: file` whose path
+  holds the file (Grafana 13 loads v2 resources from files), or a Grafana
+  sidecar that writes it there from a ConfigMap;
 - UI: *Dashboards → New → Import*, paste or upload the file;
 - API: `POST /apis/dashboard.grafana.app/v2/namespaces/default/dashboards`
   with the file as the body (namespace `default` is org 1);
@@ -134,8 +140,10 @@ never fire, because the metrics are not exposed:
 | `l2-segments` | `ServerscomL2SegmentNotActive`, `ServerscomL2MemberNotActive` |
 
 How fast the host alerts fire also depends on the collector's refresh
-interval: with `auto` it follows the request budget. To catch a split port
-aggregation within a known time, set a fixed `--refresh.features-interval`.
+interval, which is stretched when the configured intervals do not fit into
+the request budget (`ServerscomExporterDemandExceedsBudget`). To catch a split
+port aggregation within a known time, keep `--refresh.features-interval`
+short and the budget large enough for it.
 
 `ServerscomFeatureStuck` treats statuses ending in `ation` (`activation`,
 `deactivation`) as transitional; only `activation` is confirmed (by the official

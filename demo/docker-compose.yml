@@ -1,0 +1,58 @@
+# Demo: the exporter against the mock API, Prometheus with the alert rules
+# and Grafana with the dashboard. No Servers.com account needed.
+#
+#   make demo        # or: docker compose -f demo/docker-compose.yml up -d --build
+#   make demo-down
+#
+# Grafana: http://localhost:3000/d/serverscom-exporter (no login), Prometheus: http://localhost:9090,
+# exporter: http://localhost:9920. Ports are bound to localhost; change them
+# with GRAFANA_PORT, PROMETHEUS_PORT and EXPORTER_PORT.
+name: serverscom-demo
+
+services:
+  mockapi:
+    build:
+      context: ../src
+      dockerfile: ../demo/mockapi.Dockerfile
+    # 8 racks, rack N holds 2*N servers (72 servers) with a fixed pattern of
+    # problems: powered off, power feeds down, split uplinks, public OOB.
+    command: [--listen=:8080, --token=demo, --racks=8, --rack-growth=2, --ratelimit=20000]
+    restart: unless-stopped
+
+  exporter:
+    build:
+      context: ../src
+      args:
+        VERSION: demo
+    command:
+      - --api.url=http://mockapi:8080/v1
+      - --api.requests-per-hour=15000
+      - --label=account=demo
+    environment:
+      SERVERSCOM_API_TOKEN: demo
+    depends_on: [mockapi]
+    ports: ["127.0.0.1:${EXPORTER_PORT:-9920}:9920"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../grafana/alerts/serverscom.rules.yml:/etc/prometheus/rules/serverscom.rules.yml:ro
+    depends_on: [exporter]
+    ports: ["127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/dashboards:ro
+    depends_on: [prometheus]
+    ports: ["127.0.0.1:${GRAFANA_PORT:-3000}:3000"]
+    restart: unless-stopped

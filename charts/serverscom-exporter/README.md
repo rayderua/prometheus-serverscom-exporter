@@ -136,6 +136,5 @@ with `promtool check rules`.
 
 ## Grafana dashboard
 
-The dashboard in [`grafana/`](../../grafana/README.md) is a v2 resource and
-cannot be provisioned with ConfigMaps / the Grafana sidecar, so the chart does
-not ship it. Import it as described there.
+The chart does not manage Grafana. The dashboard is in
+[`grafana/`](../../grafana/README.md).

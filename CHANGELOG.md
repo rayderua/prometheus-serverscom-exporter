@@ -92,10 +92,17 @@ are versioned independently; see [CI and releases](README.md#ci-and-releases).
 - Dashboard: **Overview** with problem counters (including public OOB access,
   scheduled releases and rescue mode) and a **Needs attention** list;
   **Racks**, a panel per rack titled with its number of servers, problems
-  first; **Costs**; the **Servers** table with state, short uplink and OOB
+  first; **Costs** (total with tax, cost over time, by model and service
+  type, per server and per service); **Network** with a tile per L2 segment;
+  colored states on Power & OOB, Network and Drives; the **Servers** table with state, short uplink and OOB
   columns and cost; filters for a Servers.com label, the `--label` labels
   (ad hoc) and **Show: Problems only**; the **Exporter** tab shows the
   budget, the interval stretch and configured vs effective intervals.
+  The dashboard works with VictoriaMetrics: queries stay short with any
+  number of servers (VictoriaMetrics rejects queries over 16 KB by default)
+  and the label filter works for servers without Servers.com labels.
+- **Demo**: `make demo` starts the mock API, the exporter, Prometheus with
+  the alert rules and Grafana with the dashboard in Docker Compose.
 - Mock API: `POST /-/rename?id=<id>&title=<title>` renames a server at
   runtime; `--servers`, `--racks`, `--rack-growth` (rack N holds K×N servers
   with a fixed pattern of problems), and a real rate limit window with `429`
