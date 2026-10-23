@@ -66,7 +66,8 @@ are versioned independently; see [CI and releases](README.md#ci-and-releases).
 - **Budget window follows the account window**: the exporter's budget ends at
   `X-RateLimit-Reset` and starts over when the account limit resets.
 - **Rate limit state in the cache file**: a restart while the account is at
-  its reserve waits for the reset instead of sending a request first.
+  its reserve waits for the reset instead of sending a request first, and
+  the requests already spent in the budget window still count.
   `serverscom_api_ratelimit_paused` is 1 while the exporter waits for it.
 - **Budget priority**: when 20% or less of the budget window is left, the
   refresh loops pause until the reset, while the server list and new or
@@ -110,9 +111,11 @@ are versioned independently; see [CI and releases](README.md#ci-and-releases).
 - Alert `ServerscomHostDrivesMissing` fired for a day after a server was
   renamed or moved to another rack ("0 drives"). Drives are now counted per
   `host_id`; title, location and rack come from the current server list.
-- Collectors fetched with a new or changed server count as refreshed, so
-  their data age and `ServerscomExporterDataStale` do not wait for their own
-  first pass.
+- After a cold start, collectors fetched with the new servers count as
+  refreshed, so their data age and `ServerscomExporterDataStale` do not wait
+  for their own first pass.
+- A server released while a collector pass runs (404) no longer gets
+  requested again and again until the next server list refresh.
 
 ### Changed
 

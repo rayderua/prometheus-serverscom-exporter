@@ -338,8 +338,10 @@ everything that uses the account. The exporter applies two limits:
 2. **The account reserve.** When `X-RateLimit-Remaining` drops to
    `--api.ratelimit-reserve` (default 300), the exporter waits until the
    account window resets (`serverscom_api_ratelimit_paused` is 1). A `429`
-   response pauses it as well. The last rate limit state is kept in the cache
-   file, so a restart during such a pause does not send a request first.
+   response pauses it as well. The last rate limit state and the requests
+   spent in the current budget window are kept in the cache file, so a
+   restart neither sends a request into a used-up window nor gets a fresh
+   budget in the same window.
 
 Interrupted loops resume where they stopped; cached data is kept meanwhile.
 

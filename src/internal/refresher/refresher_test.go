@@ -26,6 +26,9 @@ type fakeAPI struct {
 	// features is returned by ListFeatures for every server.
 	features []api.Feature
 
+	// released servers answer 404 to ListDriveSlots.
+	released map[string]bool
+
 	// budgetRemaining is returned by BudgetRemaining; 0 means 1000.
 	budgetRemaining int
 }
@@ -61,8 +64,11 @@ func (f *fakeAPI) GetDedicatedServer(_ context.Context, id string) (*api.Dedicat
 	return nil, &api.Error{StatusCode: 404}
 }
 
-func (f *fakeAPI) ListDriveSlots(context.Context, string) ([]api.DriveSlot, error) {
+func (f *fakeAPI) ListDriveSlots(_ context.Context, id string) ([]api.DriveSlot, error) {
 	f.count("ListDriveSlots")
+	if f.released[id] {
+		return nil, &api.Error{StatusCode: 404}
+	}
 	return []api.DriveSlot{{Position: 0}}, nil
 }
 
@@ -468,5 +474,43 @@ func TestLoopsUseTheEffectiveIntervals(t *testing.T) {
 	}
 	if got := r.hostsInterval(); got != 2*time.Minute {
 		t.Errorf("hosts = %v, want 2m (not stretched)", got)
+	}
+}
+
+func TestReleasedServerLeavesTheQueue(t *testing.T) {
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1", LocationID: 1}}}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+
+	// h1 is released; until the next hosts refresh its drives return 404.
+	fake.released = map[string]bool{"h1": true}
+	before, _ := r.oldestHost(cache.CollectorDrives)
+	if err := r.refreshHostCollector(ctx, cache.CollectorDrives, "h1"); !api.IsNotFound(err) {
+		t.Fatalf("err = %v, want not found", err)
+	}
+	after, _ := r.oldestHost(cache.CollectorDrives)
+	if !after.fetchedAt.After(before.fetchedAt) {
+		t.Fatal("a released server stays at the front of the queue and is requested again right away")
+	}
+}
+
+func TestDownloadsDoNotHideAFailingLoop(t *testing.T) {
+	store := cache.NewStore("", slog.New(slog.DiscardHandler))
+	old := time.Now().Add(-48 * time.Hour)
+	store.Update(func(s *cache.Snapshot) { s.LastSuccess[cache.Resource(cache.CollectorDrives)] = old })
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1", LocationID: 1}}}
+	r := newTestRefresherWith(fake, store, nil)
+	ctx := context.Background()
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+
+	s := store.Snapshot()
+	if !s.LastSuccess[cache.Resource(cache.CollectorDrives)].Equal(old) {
+		t.Error("a download marked drives as refreshed although its loop has succeeded before")
+	}
+	if s.LastSuccess[cache.Resource(cache.CollectorPorts)].IsZero() {
+		t.Error("a download did not mark ports, which never succeeded, as refreshed")
 	}
 }

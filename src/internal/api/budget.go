@@ -113,6 +113,20 @@ func (b *budget) align(reset, now time.Time) {
 	}
 }
 
+// restore takes over a window saved before a restart if it has not ended:
+// used requests until end. accountReset is the account reset reported with
+// it, so the window starts over when the account window resets.
+func (b *budget) restore(used int, end, accountReset, now time.Time) {
+	if !now.Before(end) || used <= 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.end, b.used = end, min(used, b.limit)
+	b.exhausted = b.used >= b.limit
+	b.accountReset = accountReset
+}
+
 // state returns the current window state.
 func (b *budget) state(now time.Time) budgetState {
 	b.mu.Lock()

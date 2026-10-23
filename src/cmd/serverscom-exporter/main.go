@@ -118,6 +118,11 @@ func main() {
 		}
 		intervals[c] = *i
 	}
+	if *apiBudget <= 0 || *apiReserve < 0 {
+		logger.Error("--api.requests-per-hour must be positive and --api.ratelimit-reserve not negative",
+			"requests_per_hour", *apiBudget, "ratelimit_reserve", *apiReserve)
+		os.Exit(1)
+	}
 	if *hostsInterval <= 0 {
 		logger.Error("Invalid --refresh.hosts-interval", "value", *hostsInterval)
 		os.Exit(1)
@@ -332,6 +337,8 @@ func estimateSizes(apiURL, token, tokenFile string, timeout time.Duration, pageS
 	store := cache.NewStore(cacheFile, logger.With("component", "cache"))
 	store.Load()
 	sizes := refresher.SizesOf(store.Snapshot())
+	rl, _ := store.RateLimit()
+	sizes.AccountLimit = rl.Limit
 	sizes.Source = "flags"
 	if cacheFile != "" {
 		sizes.Source = "cache file " + cacheFile

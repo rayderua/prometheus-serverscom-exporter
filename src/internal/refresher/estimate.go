@@ -115,7 +115,7 @@ func PrintEstimate(w io.Writer, cfg Config, sizes Sizes, format string) error {
 		RequestsPerHour:           math.Round(e.perHour),
 		RequestsPerHourConfigured: math.Round(e.configuredPerHour),
 		FullRefreshRequests:       math.Round(e.fullRefresh),
-		FullRefreshBudgetWindows:  math.Ceil(e.fullRefresh / float64(max(e.budget, 1))),
+		FullRefreshBudgetWindows:  math.Ceil(e.fullRefresh / float64(max(min(e.budget, e.available), 1))),
 		StretchFactor:             math.Round(e.stretch*100) / 100,
 		RecommendedBudget:         e.recommendedBudget,
 		RecommendedFlags:          e.recommendation(),

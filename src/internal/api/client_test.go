@@ -174,13 +174,13 @@ func TestRestoredRateLimitPausesBeforeTheFirstRequest(t *testing.T) {
 	})
 
 	// A window that has reset already is ignored.
-	client.RestoreRateLimit(RateLimit{Limit: 2000, Remaining: 0, Reset: time.Now().Add(-time.Minute)})
+	client.RestoreRateLimit(RateLimit{Limit: 2000, Remaining: 0, Reset: time.Now().Add(-time.Minute)}, BudgetWindow{})
 	if _, err := client.ListRacks(context.Background()); err != nil || requests != 1 {
 		t.Fatalf("err = %v, requests = %d", err, requests)
 	}
 
 	// Remaining at the reserve (10): the next request waits for the reset.
-	client.RestoreRateLimit(RateLimit{Limit: 2000, Remaining: 5, Reset: time.Now().Add(time.Hour)})
+	client.RestoreRateLimit(RateLimit{Limit: 2000, Remaining: 5, Reset: time.Now().Add(time.Hour)}, BudgetWindow{})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := client.ListRacks(ctx); err == nil || requests != 1 {
@@ -197,11 +197,22 @@ func TestOnRateLimitGetsEveryHeaderUpdate(t *testing.T) {
 		_, _ = fmt.Fprint(w, `[]`)
 	})
 	var got []RateLimit
-	client.OnRateLimit(func(rl RateLimit) { got = append(got, rl) })
+	client.OnRateLimit(func(rl RateLimit, _ BudgetWindow) { got = append(got, rl) })
 	if _, err := client.ListRacks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Remaining != 1500 || got[0].Reset.Unix() != reset {
 		t.Fatalf("hook calls = %+v", got)
+	}
+}
+
+func TestRestoredBudgetWindowKeepsWhatWasSpent(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `[]`)
+	})
+	reset := time.Now().Add(10 * time.Minute)
+	client.RestoreRateLimit(RateLimit{Limit: 2000, Remaining: 1500, Reset: reset}, BudgetWindow{Used: 400, Reset: reset})
+	if st := client.budget.state(time.Now()); st.Used != 400 || !st.Reset.Equal(reset) {
+		t.Fatalf("budget = %+v, want 400 used until the saved reset", st)
 	}
 }

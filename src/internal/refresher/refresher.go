@@ -636,11 +636,15 @@ func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 		}
 		// The single-object response is fresher than the list entry.
 		s.Hosts[id] = &cache.Host{Server: *server, Details: details}
-		// The collectors fetched here count as refreshed, so their data age
-		// and staleness do not wait for their own loop's first pass.
+		// After a cold start the collectors fetched here count as refreshed,
+		// so their data age and staleness do not wait for their own loop's
+		// first pass. Later only their own loop marks them, so a loop that
+		// keeps failing still shows up as stale.
 		now := time.Now()
 		for _, c := range fetched {
-			s.LastSuccess[cache.Resource(c)] = now
+			if s.LastSuccess[cache.Resource(c)].IsZero() {
+				s.LastSuccess[cache.Resource(c)] = now
+			}
 		}
 	})
 	r.ensureUplinkModels(ctx, server)
@@ -664,8 +668,10 @@ func (r *Refresher) refreshHostCollector(ctx context.Context, c cache.Collector,
 		store, err = r.fetchHostCollector(ctx, c, id)
 	}
 	if err != nil {
-		if !api.IsRateLimited(err) && !api.IsNotFound(err) && ctx.Err() == nil {
-			r.updateHostDetails(id, c, nil) // retry on its next turn, not right away
+		// Retry on its next turn, not right away. A released server (404)
+		// leaves the queue the same way until the next hosts refresh drops it.
+		if !api.IsRateLimited(err) && ctx.Err() == nil {
+			r.updateHostDetails(id, c, nil)
 		}
 		return err
 	}

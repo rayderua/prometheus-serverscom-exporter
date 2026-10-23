@@ -78,21 +78,25 @@ func TestRateLimitIsSavedWithDataAndOnShutdown(t *testing.T) {
 
 	store := NewStore(path, logger)
 	store.Update(func(s *Snapshot) { s.LastSuccess[ResourceHosts] = time.Unix(1, 0) })
-	store.SetRateLimit(api.RateLimit{Limit: 2000, Remaining: 1500, Reset: reset})
+	store.SetRateLimit(api.RateLimit{Limit: 2000, Remaining: 1500, Reset: reset}, api.BudgetWindow{Used: 7, Reset: reset})
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	loadRemaining := func() int {
 		loaded := NewStore(path, logger)
 		loaded.Load()
-		return loaded.RateLimit().Remaining
+		rl, bw := loaded.RateLimit()
+		if bw.Used != 7 {
+			t.Errorf("budget window used = %d, want 7", bw.Used)
+		}
+		return rl.Remaining
 	}
 	if got := loadRemaining(); got != 1500 {
 		t.Fatalf("saved remaining = %d, want 1500", got)
 	}
 
 	// Only the rate limit changed: a periodic save skips the file...
-	store.SetRateLimit(api.RateLimit{Limit: 2000, Remaining: 900, Reset: reset})
+	store.SetRateLimit(api.RateLimit{Limit: 2000, Remaining: 900, Reset: reset}, api.BudgetWindow{Used: 7, Reset: reset})
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}

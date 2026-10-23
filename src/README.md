@@ -39,8 +39,9 @@ Two limits apply, and the exporter never delays requests while both have room:
   to `--api.ratelimit-reserve` (default 300), the exporter waits until the
   account window resets, leaving the rest to Terraform, the CLI and others.
   A 429 response pauses it as well (`serverscom_api_ratelimit_paused`). The
-  last state is kept in the cache file, so a restart does not send a request
-  into a used-up window.
+  last state, with the requests spent in the budget window, is kept in the
+  cache file, so a restart neither sends a request into a used-up window nor
+  gets a fresh budget in the same window.
 
 ### Demand estimate and recommendations
 

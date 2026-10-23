@@ -73,7 +73,7 @@ type Client struct {
 
 	mu        sync.Mutex
 	rateLimit RateLimit
-	onRate    func(RateLimit) // see OnRateLimit
+	onRate    func(RateLimit, BudgetWindow) // see OnRateLimit
 
 	// pauseLoggedFor is the reset time of the last logged pause, so a pause is
 	// logged once rather than by every waiting request.
@@ -83,6 +83,13 @@ type Client struct {
 // DefaultAccountLimit is the documented account-wide limit per hour, used
 // until the API reports X-RateLimit-Limit.
 const DefaultAccountLimit = 2000
+
+// BudgetWindow is the state of the exporter's own budget window, saved with
+// the rate limit so a restart does not get a fresh budget in the same window.
+type BudgetWindow struct {
+	Used  int       `json:"used"`
+	Reset time.Time `json:"reset"`
+}
 
 // RateLimit is the account-wide rate limit state reported by the API.
 type RateLimit struct {
@@ -133,24 +140,30 @@ func (c *Client) BudgetPerHour() int {
 	return c.budget.limit
 }
 
+// budgetWindow returns the current budget window for OnRateLimit.
+func (c *Client) budgetWindow() BudgetWindow {
+	st := c.budget.state(time.Now())
+	return BudgetWindow{Used: st.Used, Reset: st.Reset}
+}
+
 // BudgetRemaining returns the requests left in the current budget window.
 func (c *Client) BudgetRemaining() int {
 	return c.budget.state(time.Now()).Remaining
 }
 
-// OnRateLimit sets a function called with the new state whenever a response
-// changes the account rate limit, e.g. to persist it.
-func (c *Client) OnRateLimit(fn func(RateLimit)) {
+// OnRateLimit sets a function called with the new account rate limit and the
+// budget window whenever a response changes them, e.g. to persist them.
+func (c *Client) OnRateLimit(fn func(RateLimit, BudgetWindow)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onRate = fn
 }
 
-// RestoreRateLimit takes over a rate limit state saved earlier, e.g. in the
-// cache file, if its window has not reset yet. A restarted exporter then
-// honours the reserve before its first request instead of finding out from
-// the response.
-func (c *Client) RestoreRateLimit(rl RateLimit) {
+// RestoreRateLimit takes over a rate limit state and budget window saved
+// earlier, e.g. in the cache file, if their windows have not reset yet. A
+// restarted exporter then honours the reserve before its first request, and
+// keeps counting the requests it already spent in the current window.
+func (c *Client) RestoreRateLimit(rl RateLimit, bw BudgetWindow) {
 	now := time.Now()
 	if rl.Limit <= 0 || !now.Before(rl.Reset) {
 		return
@@ -159,11 +172,13 @@ func (c *Client) RestoreRateLimit(rl RateLimit) {
 	c.rateLimit = rl
 	c.mu.Unlock()
 	c.budget.align(rl.Reset, now)
+	c.budget.restore(bw.Used, bw.Reset, rl.Reset, now)
 	c.metrics.rateLimit.Set(float64(rl.Limit))
 	c.metrics.rateRemaining.Set(float64(rl.Remaining))
 	c.metrics.rateReset.Set(float64(rl.Reset.Unix()))
 	c.logger.Info("Restored the account rate limit state", "limit", rl.Limit, "remaining", rl.Remaining,
-		"reset_at", rl.Reset.Format(time.RFC3339), "paused", rl.Remaining <= c.reserve)
+		"reset_at", rl.Reset.Format(time.RFC3339), "paused", rl.Remaining <= c.reserve,
+		"budget_used", c.budget.state(now).Used)
 }
 
 // RateLimit returns the last account-wide rate limit state seen in responses.
@@ -324,7 +339,7 @@ func (c *Client) updateRateLimit(h http.Header) {
 	onRate := c.onRate
 	c.mu.Unlock()
 	if onRate != nil {
-		onRate(rl)
+		onRate(rl, c.budgetWindow())
 	}
 
 	// The exporter's budget window follows the account window.
@@ -351,7 +366,7 @@ func (c *Client) pauseAfterRateLimited() {
 	rl, onRate := c.rateLimit, c.onRate
 	c.mu.Unlock()
 	if onRate != nil {
-		onRate(rl)
+		onRate(rl, c.budgetWindow())
 	}
 }
 

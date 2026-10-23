@@ -33,6 +33,7 @@ type Store struct {
 	// written with the next save of changed data and on shutdown, not on its
 	// own: it changes with every request.
 	rateLimit atomic.Pointer[api.RateLimit]
+	budget    atomic.Pointer[api.BudgetWindow]
 	rateDirty atomic.Bool
 
 	path   string
@@ -66,25 +67,33 @@ func (s *Store) Update(fn func(*Snapshot)) {
 
 // cacheFile is the on-disk representation.
 type cacheFile struct {
-	Version   int            `json:"version"`
-	SavedAt   time.Time      `json:"saved_at"`
-	Snapshot  *Snapshot      `json:"snapshot"`
-	RateLimit *api.RateLimit `json:"rate_limit,omitempty"`
+	Version   int               `json:"version"`
+	SavedAt   time.Time         `json:"saved_at"`
+	Snapshot  *Snapshot         `json:"snapshot"`
+	RateLimit *api.RateLimit    `json:"rate_limit,omitempty"`
+	Budget    *api.BudgetWindow `json:"budget,omitempty"`
 }
 
-// SetRateLimit records the account rate limit state for the next save.
-func (s *Store) SetRateLimit(rl api.RateLimit) {
+// SetRateLimit records the account rate limit state and the exporter's
+// budget window for the next save.
+func (s *Store) SetRateLimit(rl api.RateLimit, bw api.BudgetWindow) {
 	s.rateLimit.Store(&rl)
+	s.budget.Store(&bw)
 	s.rateDirty.Store(true)
 }
 
-// RateLimit returns the last recorded account rate limit state, e.g. loaded
-// from the cache file; zero if there is none.
-func (s *Store) RateLimit() api.RateLimit {
-	if rl := s.rateLimit.Load(); rl != nil {
-		return *rl
+// RateLimit returns the last recorded account rate limit state and budget
+// window, e.g. loaded from the cache file; zero if there is none.
+func (s *Store) RateLimit() (api.RateLimit, api.BudgetWindow) {
+	var rl api.RateLimit
+	var bw api.BudgetWindow
+	if p := s.rateLimit.Load(); p != nil {
+		rl = *p
 	}
-	return api.RateLimit{}
+	if p := s.budget.Load(); p != nil {
+		bw = *p
+	}
+	return rl, bw
 }
 
 // Load reads the cache file, if persistence is enabled and the file exists.
@@ -121,6 +130,9 @@ func (s *Store) Load() {
 	if file.RateLimit != nil {
 		s.rateLimit.Store(file.RateLimit)
 	}
+	if file.Budget != nil {
+		s.budget.Store(file.Budget)
+	}
 	s.logger.Info("Loaded cache file", "path", s.path, "saved_at", file.SavedAt,
 		"hosts", len(file.Snapshot.Hosts), "l2_segments", len(file.Snapshot.Segments))
 }
@@ -151,6 +163,7 @@ func (s *Store) save(withRateLimit bool) error {
 		SavedAt:   time.Now(),
 		Snapshot:  s.current.Load(),
 		RateLimit: s.rateLimit.Load(),
+		Budget:    s.budget.Load(),
 	})
 	if err != nil {
 		s.dirty.Store(true)
