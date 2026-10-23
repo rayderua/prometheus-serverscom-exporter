@@ -1,9 +1,15 @@
 // Command mockapi is a minimal fake of the Servers.com Public API v1 for smoke
-// tests and local development. It serves a fixed inventory (two servers, one
-// L2 segment), paginates with Link headers like the real API, sends
-// X-RateLimit-* headers and requires a bearer token.
+// tests and local development. It serves a generated inventory (by default
+// two servers in one rack, one L2 segment), paginates with Link headers like
+// the real API and requires a bearer token.
+//
+// Like the real API it limits requests per window: the window starts at a
+// multiple of --ratelimit-window (the full hour by default), X-RateLimit-*
+// headers report it, and requests over the limit get 429.
 //
 //	go run ./test/mockapi --listen=:8080 --token=test
+//	go run ./test/mockapi --servers=175 --racks=16 --ratelimit-window=5m
+//	go run ./test/mockapi --racks=18 --rack-growth=2   # rack N holds 2*N servers
 //	serverscom-exporter --api.url=http://localhost:8080/v1 --api.token=test
 package main
 
@@ -18,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -33,9 +38,7 @@ var (
 	locations = []map[string]any{
 		{"id": locationID, "name": "Amsterdam", "code": "AMS1", "status": "active", "supported_features": []string{}},
 	}
-	racks = []map[string]any{
-		{"id": "rack-1", "name": "R1", "location_id": locationID, "location_code": "AMS1"},
-	}
+	racks        []map[string]any // see generate
 	uplinkModels = []map[string]any{
 		{"id": 11, "name": "Public 2x10G", "type": "public", "speed": 10000, "redundancy": true},
 		{"id": 12, "name": "Private 2x10G", "type": "private", "speed": 10000, "redundancy": true},
@@ -67,16 +70,24 @@ var (
 		{"name": "oob_public_access", "status": "deactivated"},
 		{"name": "disaggregated_private_ports", "status": "deactivated"},
 	}
+	services = []map[string]any{
+		{"id": "svc-1", "name": "Server hardware", "type": "server_base", "label": "", "currency": "USD",
+			"date_from": "2026-10-01", "date_to": "2026-10-31", "usage_quantity": 1,
+			"tax": 0, "total": 250, "subtotal": 250, "discount_rate": 0},
+		{"id": "svc-2", "name": "Bandwidth 20 TB", "type": "bandwidth", "label": "", "currency": "USD",
+			"date_from": "2026-10-01", "date_to": "2026-10-31", "usage_quantity": 1,
+			"tax": 0, "total": 0, "subtotal": 0, "discount_rate": 0},
+	}
 	powerFeeds = []map[string]any{
 		{"name": "A", "status": "on", "type": "primary"},
 		{"name": "B", "status": "on", "type": "secondary"},
 	}
 )
 
-func server(id, title, power string) map[string]any {
+func server(id, title, power, rack string) map[string]any {
 	return map[string]any{
 		"id": id, "type": "dedicated_server", "title": title,
-		"location_id": locationID, "location_code": "AMS1", "rack_id": "rack-1",
+		"location_id": locationID, "location_code": "AMS1", "rack_id": rack,
 		"status": "active", "operational_status": "normal", "power_status": power,
 		"configuration":        "Dell R640 / 2x Xeon Gold / 128 GB",
 		"private_ipv4_address": "10.0.0.1", "public_ipv4_address": "192.0.2.1", "oob_ipv4_address": "10.255.0.1",
@@ -93,21 +104,90 @@ func server(id, title, power string) map[string]any {
 	}
 }
 
-var servers = []map[string]any{
-	server("srv-1", "node-1", "powered_on"),
-	server("srv-2", "node-2", "powered_off"),
+// servers is the inventory; see generate.
+var servers []map[string]any
+
+// generate builds n servers spread over m racks: node-1 (powered on) and
+// node-2 (powered off) as the smoke test expects, the rest powered on.
+func generate(n, m int) {
+	racks = nil
+	for i := 1; i <= m; i++ {
+		racks = append(racks, map[string]any{"id": fmt.Sprintf("rack-%d", i), "name": fmt.Sprintf("R%d", i),
+			"location_id": locationID, "location_code": "AMS1"})
+	}
+	servers = nil
+	for i := 1; i <= n; i++ {
+		power := "powered_on"
+		if i == 2 {
+			power = "powered_off"
+		}
+		servers = append(servers, server(fmt.Sprintf("srv-%d", i), fmt.Sprintf("node-%d", i), power,
+			fmt.Sprintf("rack-%d", (i-1)%m+1)))
+	}
+}
+
+// rateLimit counts requests per window, like X-RateLimit-* of the real API.
+type rateLimit struct {
+	limit  int64
+	window time.Duration
+
+	mu    sync.Mutex
+	start time.Time
+	used  int64
+}
+
+// take counts a request at now and returns the remaining requests, the reset
+// time and whether the request is allowed.
+func (l *rateLimit) take(now time.Time) (remaining int64, reset time.Time, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if start := now.Truncate(l.window); !start.Equal(l.start) {
+		l.start, l.used = start, 0
+	}
+	reset = l.start.Add(l.window)
+	if l.used >= l.limit {
+		return 0, reset, false
+	}
+	l.used++
+	return l.limit - l.used, reset, true
 }
 
 func main() {
 	listen := flag.String("listen", ":8080", "Listen address.")
 	token := flag.String("token", "test", "Accepted bearer token.")
+	serverCount := flag.Int("servers", 2, "Number of servers.")
+	rackCount := flag.Int("racks", 1, "Number of racks the servers are spread over.")
+	limit := flag.Int64("ratelimit", 2000, "Requests per rate limit window (X-RateLimit-Limit).")
+	window := flag.Duration("ratelimit-window", time.Hour, "Rate limit window; it starts at a multiple of this duration.")
+	growth := flag.Int("rack-growth", 0, "If above 0, rack N holds rack-growth*N servers (--servers is ignored), "+
+		"with several models, labels and prices and a fixed pattern of problems: powered off, power feed down, "+
+		"split bonding, public OOB access, missing drives, no prices yet.")
 	flag.Parse()
+	if *serverCount < 2 || *rackCount < 1 || *limit < 1 || *window <= 0 || *growth < 0 {
+		log.Fatal("want --servers >= 2, --racks >= 1, --ratelimit >= 1, --rack-growth >= 0 and a positive --ratelimit-window")
+	}
+	if *growth > 0 {
+		generateGrowing(*rackCount, *growth)
+		*serverCount = len(servers)
+	} else {
+		generate(*serverCount, *rackCount)
+	}
+	rl := &rateLimit{limit: *limit, window: *window}
 
-	var requests atomic.Int64
 	mux := http.NewServeMux()
 
 	collection := func(path string, items []map[string]any) {
 		mux.HandleFunc("GET /v1"+path, func(w http.ResponseWriter, r *http.Request) {
+			writePage(w, r, items)
+		})
+	}
+	// perServer serves the server's own collection (--random) or the shared one.
+	perServer := func(name string, shared []map[string]any) {
+		mux.HandleFunc("GET /v1/hosts/dedicated_servers/{id}/"+name, func(w http.ResponseWriter, r *http.Request) {
+			items, ok := details[r.PathValue("id")][name]
+			if !ok {
+				items = shared
+			}
 			writePage(w, r, items)
 		})
 	}
@@ -157,28 +237,41 @@ func main() {
 		writePage(w, r, currentServers())
 	})
 	object("/hosts/dedicated_servers/{id}", findServer)
-	collection("/hosts/dedicated_servers/{id}/drive_slots", driveSlots)
-	collection("/hosts/dedicated_servers/{id}/connections", connections)
-	collection("/hosts/dedicated_servers/{id}/networks", networks)
-	collection("/hosts/dedicated_servers/{id}/features", features)
-	collection("/hosts/dedicated_servers/{id}/power_feeds", powerFeeds)
+	perServer("drive_slots", driveSlots)
+	perServer("connections", connections)
+	perServer("networks", networks)
+	perServer("features", features)
+	perServer("power_feeds", powerFeeds)
+	perServer("services", services)
 	collection("/l2_segments", l2Segments)
-	collection("/l2_segments/{id}/members", l2Members)
+	mux.HandleFunc("GET /v1/l2_segments/{id}/members", func(w http.ResponseWriter, r *http.Request) {
+		items, ok := segmentMembers[r.PathValue("id")]
+		if !ok && *growth == 0 {
+			items = l2Members
+		}
+		writePage(w, r, items)
+	})
 	collection("/l2_segments/{id}/networks", networks)
 	collection("/locations", locations)
 	collection("/racks", racks)
 	collection("/locations/{location}/order_options/server_models/{model}/uplink_models", uplinkModels)
 
-	reset := time.Now().Add(time.Hour).Unix()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/-/healthy" {
 			_, _ = w.Write([]byte("OK"))
 			return
 		}
-		n := requests.Add(1)
-		w.Header().Set("X-RateLimit-Limit", "2000")
-		w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(max(2000-n, 0), 10))
-		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			remaining, reset, ok := rl.take(time.Now())
+			w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(*limit, 10))
+			w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+			if !ok {
+				log.Printf("429 %s %s", r.Method, r.URL.RequestURI())
+				http.Error(w, `{"message":"rate limit exceeded"}`, http.StatusTooManyRequests)
+				return
+			}
+		}
 		if r.Header.Get("Authorization") != "Bearer "+*token {
 			http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -187,7 +280,8 @@ func main() {
 		mux.ServeHTTP(w, r)
 	})
 
-	log.Printf("mock Servers.com API listening on %s", *listen)
+	log.Printf("mock Servers.com API listening on %s: %d servers in %d racks, %d requests per %s",
+		*listen, *serverCount, *rackCount, *limit, *window)
 	srv := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }
