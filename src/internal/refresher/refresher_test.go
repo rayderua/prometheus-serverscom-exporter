@@ -25,6 +25,12 @@ type fakeAPI struct {
 
 	// features is returned by ListFeatures for every server.
 	features []api.Feature
+
+	// released servers answer 404 to ListDriveSlots.
+	released map[string]bool
+
+	// budgetRemaining is returned by BudgetRemaining; 0 means 1000.
+	budgetRemaining int
 }
 
 func (f *fakeAPI) count(name string) {
@@ -58,12 +64,16 @@ func (f *fakeAPI) GetDedicatedServer(_ context.Context, id string) (*api.Dedicat
 	return nil, &api.Error{StatusCode: 404}
 }
 
-func (f *fakeAPI) ListDriveSlots(context.Context, string) ([]api.DriveSlot, error) {
+func (f *fakeAPI) ListDriveSlots(_ context.Context, id string) ([]api.DriveSlot, error) {
 	f.count("ListDriveSlots")
+	if f.released[id] {
+		return nil, &api.Error{StatusCode: 404}
+	}
 	return []api.DriveSlot{{Position: 0}}, nil
 }
 
 func (f *fakeAPI) ListConnections(context.Context, string) ([]api.Connection, error) {
+	f.count("ListConnections")
 	return nil, nil
 }
 
@@ -76,7 +86,13 @@ func (f *fakeAPI) ListFeatures(context.Context, string) ([]api.Feature, error) {
 	return f.features, nil
 }
 
+func (f *fakeAPI) ListServices(context.Context, string) ([]api.Service, error) {
+	f.count("ListServices")
+	return nil, nil
+}
+
 func (f *fakeAPI) ListPowerFeeds(context.Context, string) ([]api.PowerFeed, error) {
+	f.count("ListPowerFeeds")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failPowerFeeds {
@@ -110,10 +126,32 @@ func (f *fakeAPI) ListUplinkModels(context.Context, int64, int64) ([]api.UplinkM
 
 func (f *fakeAPI) RateLimit() api.RateLimit { return api.RateLimit{} }
 
+func (f *fakeAPI) BudgetRemaining() int {
+	if f.budgetRemaining == 0 {
+		return 1000
+	}
+	return f.budgetRemaining
+}
+
 func newTestRefresher(fake *fakeAPI) *Refresher {
-	store := cache.NewStore("", slog.New(slog.DiscardHandler))
-	cfg := Config{HostsInterval: time.Minute, DetailsInterval: time.Hour, FeaturesInterval: time.Minute, L2Interval: time.Minute, ReferenceInterval: time.Hour}
+	return newTestRefresherWith(fake, cache.NewStore("", slog.New(slog.DiscardHandler)), nil)
+}
+
+func newTestRefresherWith(fake *fakeAPI, store *cache.Store, disabled cache.DisabledCollectors) *Refresher {
+	cfg := testConfig()
+	cfg.Disabled = disabled
+	return newTestRefresherConfig(fake, store, cfg)
+}
+
+func newTestRefresherConfig(fake *fakeAPI, store *cache.Store, cfg Config) *Refresher {
 	return New(fake, store, cfg, slog.New(slog.DiscardHandler), prometheus.NewRegistry())
+}
+
+func testConfig() Config {
+	return Config{
+		HostsInterval: 2 * time.Minute,
+		PageSize:      100, BudgetPerHour: 400, Reserve: 300,
+	}
 }
 
 func TestDetailsAreFetchedOnceAndRefetchedOnChange(t *testing.T) {
@@ -166,22 +204,6 @@ func TestHostsRefreshKeepsDetailsAndDropsReleasedServers(t *testing.T) {
 	}
 }
 
-func TestStaleDetailsAreDue(t *testing.T) {
-	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1"}}}
-	r := newTestRefresher(fake)
-	ctx := context.Background()
-
-	mustRun(t, r.refreshHosts(ctx))
-	mustRun(t, r.refreshDetails(ctx))
-
-	if due := r.hostsDueForDetails(time.Now()); len(due) != 0 {
-		t.Fatalf("fresh details are due: %v", due)
-	}
-	if due := r.hostsDueForDetails(time.Now().Add(2 * time.Hour)); len(due) != 1 {
-		t.Fatalf("stale details are not due: %v", due)
-	}
-}
-
 func TestL2AndReference(t *testing.T) {
 	r := newTestRefresher(&fakeAPI{})
 	ctx := context.Background()
@@ -196,7 +218,7 @@ func TestL2AndReference(t *testing.T) {
 	if snapshot.Racks["rack1"].Name != "R1" || snapshot.Locations[1].Code != "ams1" {
 		t.Fatalf("reference data not stored: %+v %+v", snapshot.Racks, snapshot.Locations)
 	}
-	for _, resource := range []cache.Resource{cache.ResourceL2Segments, cache.ResourceLocations, cache.ResourceRacks, cache.ResourceUplinks} {
+	for _, resource := range []cache.Resource{cache.Resource(cache.CollectorL2Segments), cache.Resource(cache.CollectorReference)} {
 		if snapshot.LastSuccess[resource].IsZero() {
 			t.Errorf("last success of %s not recorded", resource)
 		}
@@ -228,57 +250,35 @@ func TestFailedSubResourceKeepsTheRest(t *testing.T) {
 	}
 }
 
-func TestFeaturesRefreshPicksUpChangesWithoutUpdatedAt(t *testing.T) {
-	updated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	fake := &fakeAPI{
-		servers:  []api.DedicatedServer{{ID: "h1", UpdatedAt: updated}, {ID: "h2", UpdatedAt: updated}},
-		features: []api.Feature{{Name: "disaggregated_private_ports", Status: "deactivated"}},
-	}
-	r := newTestRefresher(fake)
+func TestDisabledCollectorsAreNotFetched(t *testing.T) {
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1", LocationID: 1}}}
+	store := cache.NewStore("", slog.New(slog.DiscardHandler))
+	r := newTestRefresherWith(fake, store, cache.DisabledCollectors{
+		cache.CollectorDrives: true, cache.CollectorFeatures: true, cache.CollectorUplinks: true,
+	})
 	ctx := context.Background()
 
 	mustRun(t, r.refreshHosts(ctx))
 	mustRun(t, r.refreshDetails(ctx))
-	driveSlotCalls := fake.callCount("ListDriveSlots")
+	mustRun(t, r.refreshReference(ctx))
 
-	// The feature is toggled; updated_at stays the same.
-	fake.mu.Lock()
-	fake.features = []api.Feature{{Name: "disaggregated_private_ports", Status: "activated"}}
-	fake.mu.Unlock()
-
-	mustRun(t, r.refreshHosts(ctx))
-	if due := r.hostsDueForDetails(time.Now()); len(due) != 0 {
-		t.Fatalf("details unexpectedly due: %+v", due)
-	}
-	mustRun(t, r.refreshFeatures(ctx))
-
-	for _, id := range []string{"h1", "h2"} {
-		features := r.store.Snapshot().Hosts[id].Details.Features
-		if len(features) != 1 || features[0].Status != "activated" {
-			t.Fatalf("%s features = %+v, want activated", id, features)
+	for method, want := range map[string]int{
+		"ListDriveSlots": 0, "ListFeatures": 0, "ListUplinkModels": 0,
+		"ListConnections": 1, "ListPowerFeeds": 1, "GetDedicatedServer": 1,
+	} {
+		if got := fake.callCount(method); got != want {
+			t.Errorf("%s calls = %d, want %d", method, got, want)
 		}
 	}
-	if got := fake.callCount("ListDriveSlots"); got != driveSlotCalls {
-		t.Fatalf("features refresh refetched drive slots: %d -> %d calls", driveSlotCalls, got)
+	fetched := store.Snapshot().Hosts["h1"].Details.Fetched
+	if _, ok := fetched[cache.CollectorDrives]; ok {
+		t.Fatalf("fetched = %v", fetched)
 	}
-	if r.store.Snapshot().LastSuccess[cache.ResourceFeatures].IsZero() {
-		t.Fatal("features refresh success not recorded")
+	if _, ok := fetched[cache.CollectorPorts]; !ok {
+		t.Fatalf("fetched = %v", fetched)
 	}
-}
-
-func TestFeaturesRefreshSkipsHostsWithoutDetails(t *testing.T) {
-	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1"}}}
-	r := newTestRefresher(fake)
-	ctx := context.Background()
-
-	mustRun(t, r.refreshHosts(ctx))
-	mustRun(t, r.refreshFeatures(ctx))
-
-	if got := fake.callCount("ListFeatures"); got != 0 {
-		t.Fatalf("ListFeatures calls = %d, want 0 for hosts without details", got)
-	}
-	if r.store.Snapshot().Hosts["h1"].Details != nil {
-		t.Fatal("features refresh created partial details")
+	if !store.Snapshot().LastSuccess[cache.Resource(cache.CollectorUplinks)].IsZero() {
+		t.Fatal("uplinks refresh recorded while disabled")
 	}
 }
 
@@ -286,5 +286,231 @@ func mustRun(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHostCollectorQueueIsOldestFirst(t *testing.T) {
+	store := cache.NewStore("", slog.New(slog.DiscardHandler))
+	base := time.Now().Add(-time.Hour)
+	store.Update(func(s *cache.Snapshot) {
+		s.Hosts["h1"] = &cache.Host{Details: &cache.HostDetails{Fetched: map[cache.Collector]time.Time{cache.CollectorDrives: base.Add(2 * time.Minute)}}}
+		s.Hosts["h2"] = &cache.Host{Details: &cache.HostDetails{Fetched: map[cache.Collector]time.Time{cache.CollectorDrives: base}}}
+		s.Hosts["h3"] = &cache.Host{Details: &cache.HostDetails{Fetched: map[cache.Collector]time.Time{}}} // drives never fetched
+		s.Hosts["h4"] = &cache.Host{}                                                                      // new: downloaded by refreshDetails, not queued
+	})
+	r := newTestRefresherWith(&fakeAPI{}, store, nil)
+
+	for _, want := range []string{"h3", "h2", "h1"} {
+		target, servers := r.oldestHost(cache.CollectorDrives)
+		if target.id != want || servers != 3 {
+			t.Fatalf("oldest = %s of %d servers, want %s of 3", target.id, servers, want)
+		}
+		mustRun(t, r.refreshHostCollector(context.Background(), cache.CollectorDrives, target.id))
+	}
+}
+
+func TestHostCollectorRefreshChangesOnlyItsData(t *testing.T) {
+	updated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := &fakeAPI{
+		servers:  []api.DedicatedServer{{ID: "h1", UpdatedAt: updated}},
+		features: []api.Feature{{Name: "disaggregated_private_ports", Status: "deactivated"}},
+	}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+	before := r.store.Snapshot().Hosts["h1"].Details
+
+	// The feature is toggled; updated_at stays the same, so only the features
+	// collector can notice it.
+	fake.mu.Lock()
+	fake.features = []api.Feature{{Name: "disaggregated_private_ports", Status: "activated"}}
+	fake.mu.Unlock()
+	time.Sleep(time.Millisecond) // distinct timestamps
+	mustRun(t, r.refreshHostCollector(ctx, cache.CollectorFeatures, "h1"))
+
+	after := r.store.Snapshot().Hosts["h1"].Details
+	if len(after.Features) != 1 || after.Features[0].Status != "activated" {
+		t.Fatalf("features = %+v, want activated", after.Features)
+	}
+	if !after.Fetched[cache.CollectorFeatures].After(before.Fetched[cache.CollectorFeatures]) {
+		t.Error("features fetch time not updated")
+	}
+	if !after.Fetched[cache.CollectorDrives].Equal(before.Fetched[cache.CollectorDrives]) {
+		t.Error("drives fetch time changed by a features refresh")
+	}
+	if got := fake.callCount("ListDriveSlots"); got != 1 {
+		t.Errorf("drive slot requests = %d, want 1", got)
+	}
+	if len(before.Features) != 1 || before.Features[0].Status != "deactivated" {
+		t.Error("published details were modified in place")
+	}
+}
+
+func TestFailingHostCollectorKeepsDataAndMovesBack(t *testing.T) {
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1"}}}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+	before := r.store.Snapshot().Hosts["h1"].Details.Fetched[cache.CollectorPowerFeeds]
+
+	fake.mu.Lock()
+	fake.failPowerFeeds = true
+	fake.mu.Unlock()
+	time.Sleep(time.Millisecond)
+	if err := r.refreshHostCollector(ctx, cache.CollectorPowerFeeds, "h1"); err == nil {
+		t.Fatal("want an error")
+	}
+
+	details := r.store.Snapshot().Hosts["h1"].Details
+	if len(details.PowerFeeds) != 1 {
+		t.Fatalf("cached power feeds lost: %+v", details.PowerFeeds)
+	}
+	// Moved to the end of the queue, so a permanent 403 is not retried in a loop.
+	if !details.Fetched[cache.CollectorPowerFeeds].After(before) {
+		t.Error("failed collector was not moved to the end of the queue")
+	}
+}
+
+func TestPartialNewHostIsQueuedFirst(t *testing.T) {
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1"}, {ID: "h2"}}, failPowerFeeds: true}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx)) // published without power feeds
+
+	if due := r.hostsDueForDetails(); len(due) != 0 {
+		t.Fatalf("partial hosts are due for a full download again: %+v", due)
+	}
+	target, _ := r.oldestHost(cache.CollectorPowerFeeds)
+	if !target.fetchedAt.IsZero() {
+		t.Fatalf("power feeds of %s fetched at %v, want never", target.id, target.fetchedAt)
+	}
+	target, _ = r.oldestHost(cache.CollectorDrives)
+	if target.fetchedAt.IsZero() {
+		t.Fatal("drives were not recorded as fetched")
+	}
+}
+
+func TestLoopsWaitForBudget(t *testing.T) {
+	// Budget 400: the loops leave the last 20% (80 requests) to the server list.
+	fake := &fakeAPI{budgetRemaining: 81}
+	r := newTestRefresher(fake)
+	if !r.waitForBudget(context.Background()) {
+		t.Fatal("loops blocked with budget left")
+	}
+
+	fake.budgetRemaining = 80
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if r.waitForBudget(ctx) {
+		t.Fatal("loops did not wait with 20% of the budget left")
+	}
+}
+
+func TestPrepareCacheDropsDisabledData(t *testing.T) {
+	store := cache.NewStore("", slog.New(slog.DiscardHandler))
+	now := time.Now()
+	store.Update(func(s *cache.Snapshot) {
+		s.Hosts["h1"] = &cache.Host{Details: &cache.HostDetails{
+			Fetched:    map[cache.Collector]time.Time{cache.CollectorDrives: now, cache.CollectorFeatures: now},
+			DriveSlots: []api.DriveSlot{{Position: 0}},
+			Features:   []api.Feature{{Name: "oob_public_access"}},
+		}}
+		s.Segments["seg1"] = &cache.Segment{}
+		s.Uplinks["1/7"] = &cache.UplinkModels{}
+		for _, resource := range []cache.Resource{"l2-segments", "uplinks", "features", "hosts", "host_features", "locations"} {
+			s.LastSuccess[resource] = now
+		}
+	})
+
+	newTestRefresherWith(&fakeAPI{}, store, cache.DisabledCollectors{
+		cache.CollectorDrives: true, cache.CollectorL2Segments: true, cache.CollectorUplinks: true,
+	})
+
+	s := store.Snapshot()
+	details := s.Hosts["h1"].Details
+	if details.DriveSlots != nil || len(details.Features) != 1 {
+		t.Fatalf("details = %+v, want drives dropped and features kept", details)
+	}
+	if _, ok := details.Fetched[cache.CollectorDrives]; ok {
+		t.Error("fetch time of disabled drives kept")
+	}
+	if len(s.Segments) != 0 || len(s.Uplinks) != 0 {
+		t.Errorf("segments = %v, uplinks = %v", s.Segments, s.Uplinks)
+	}
+	// Disabled and old resource names go; others stay.
+	for resource, want := range map[cache.Resource]bool{
+		"l2-segments": false, "uplinks": false, "host_features": false, "locations": false, "features": true, "hosts": true,
+	} {
+		if _, ok := s.LastSuccess[resource]; ok != want {
+			t.Errorf("last success of %s kept = %v, want %v", resource, ok, want)
+		}
+	}
+}
+
+func TestLoopsUseTheEffectiveIntervals(t *testing.T) {
+	servers := make([]api.DedicatedServer, 20)
+	for i := range servers {
+		servers[i] = api.DedicatedServer{ID: string(rune('a' + i)), LocationID: 1}
+	}
+	cfg := testConfig()
+	cfg.BudgetPerHour = 200
+	r := newTestRefresherConfig(&fakeAPI{servers: servers}, cache.NewStore("", slog.New(slog.DiscardHandler)), cfg)
+
+	// Before the first estimate the configured intervals apply.
+	if got := r.interval(cache.CollectorFeatures); got != 15*time.Minute {
+		t.Fatalf("features before the estimate = %v, want 15m", got)
+	}
+
+	mustRun(t, r.refreshHosts(context.Background()))
+
+	if got := r.interval(cache.CollectorFeatures); got != 20*time.Minute {
+		t.Errorf("features = %v, want 20m (stretched)", got)
+	}
+	if got := r.hostsInterval(); got != 2*time.Minute {
+		t.Errorf("hosts = %v, want 2m (not stretched)", got)
+	}
+}
+
+func TestReleasedServerLeavesTheQueue(t *testing.T) {
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1", LocationID: 1}}}
+	r := newTestRefresher(fake)
+	ctx := context.Background()
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+
+	// h1 is released; until the next hosts refresh its drives return 404.
+	fake.released = map[string]bool{"h1": true}
+	before, _ := r.oldestHost(cache.CollectorDrives)
+	if err := r.refreshHostCollector(ctx, cache.CollectorDrives, "h1"); !api.IsNotFound(err) {
+		t.Fatalf("err = %v, want not found", err)
+	}
+	after, _ := r.oldestHost(cache.CollectorDrives)
+	if !after.fetchedAt.After(before.fetchedAt) {
+		t.Fatal("a released server stays at the front of the queue and is requested again right away")
+	}
+}
+
+func TestDownloadsDoNotHideAFailingLoop(t *testing.T) {
+	store := cache.NewStore("", slog.New(slog.DiscardHandler))
+	old := time.Now().Add(-48 * time.Hour)
+	store.Update(func(s *cache.Snapshot) { s.LastSuccess[cache.Resource(cache.CollectorDrives)] = old })
+	fake := &fakeAPI{servers: []api.DedicatedServer{{ID: "h1", LocationID: 1}}}
+	r := newTestRefresherWith(fake, store, nil)
+	ctx := context.Background()
+	mustRun(t, r.refreshHosts(ctx))
+	mustRun(t, r.refreshDetails(ctx))
+
+	s := store.Snapshot()
+	if !s.LastSuccess[cache.Resource(cache.CollectorDrives)].Equal(old) {
+		t.Error("a download marked drives as refreshed although its loop has succeeded before")
+	}
+	if s.LastSuccess[cache.Resource(cache.CollectorPorts)].IsZero() {
+		t.Error("a download did not mark ports, which never succeeded, as refreshed")
 	}
 }

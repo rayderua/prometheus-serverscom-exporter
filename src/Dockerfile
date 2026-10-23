@@ -27,8 +27,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY . .
 
-# Static binary; version info is read by prometheus/common/version and shown
-# by --version, the landing page and serverscom_exporter_build_info.
+# Static binary, same ldflags as the Makefile; version info is read by
+# prometheus/common/version and shown by --version, the landing page and
+# serverscom_exporter_build_info.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \

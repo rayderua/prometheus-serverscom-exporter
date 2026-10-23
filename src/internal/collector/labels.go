@@ -55,7 +55,7 @@ func (m *labelMapper) names(all []map[string]string) labelNames {
 	var result labelNames
 	used := map[string]bool{}
 	for _, key := range keys {
-		name := "label_" + sanitizeLabelName(key)
+		name := HostLabelPrefix + sanitizeLabelName(key)
 		if used[name] {
 			continue
 		}

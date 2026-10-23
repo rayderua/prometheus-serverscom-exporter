@@ -25,7 +25,7 @@ func testStore() *cache.Store {
 				PowerStatus: "powered_on", Labels: map[string]string{"env": "prod", "k8s.role": "worker"},
 			},
 			Details: &cache.HostDetails{
-				FetchedAt:     time.Unix(1000, 0),
+				Fetched:       map[cache.Collector]time.Time{cache.CollectorConfiguration: time.Unix(1000, 0)},
 				Configuration: &api.ConfigurationDetails{ServerModelID: 7, PublicUplinkID: 1, PrivateUplinkID: 2},
 				Features: []api.Feature{
 					{Name: "disaggregated_private_ports", Status: "activated"},
@@ -51,7 +51,7 @@ func testStore() *cache.Store {
 }
 
 func TestHostMetrics(t *testing.T) {
-	c := New(testStore(), []string{"*"})
+	c := New(testStore(), []string{"*"}, nil)
 
 	expected := `
 # HELP serverscom_host_powered_on Whether the server is powered on (1) or not (0).
@@ -83,7 +83,7 @@ serverscom_host_feature_enabled{feature="oob_public_access",host_id="h1",locatio
 }
 
 func TestHostLabelAllowlist(t *testing.T) {
-	c := New(testStore(), []string{"env"})
+	c := New(testStore(), []string{"env"}, nil)
 
 	expected := `
 # HELP serverscom_host_labels Servers.com labels of the server as label_* labels.
@@ -96,9 +96,30 @@ serverscom_host_labels{host_id="h2",label_env="",location="ams1",rack="unknown-r
 	}
 }
 
+func TestDisabledCollectorsAreNotExposed(t *testing.T) {
+	c := New(testStore(), []string{"*"}, cache.DisabledCollectors{
+		cache.CollectorDrives: true, cache.CollectorFeatures: true,
+	})
+
+	// Without features the aggregation state is unknown; the uplink model is still exposed.
+	expected := `
+# HELP serverscom_host_uplink_redundant Whether the uplink model provides redundant (aggregatable) links (1) or a single link (0).
+# TYPE serverscom_host_uplink_redundant gauge
+serverscom_host_uplink_redundant{host_id="h1",location="ams1",rack="R01",title="node-1",uplink="private"} 1
+serverscom_host_uplink_redundant{host_id="h1",location="ams1",rack="R01",title="node-1",uplink="public"} 1
+`
+	err := testutil.CollectAndCompare(c, strings.NewReader(expected),
+		"serverscom_host_uplink_redundant", "serverscom_host_uplink_aggregated",
+		"serverscom_host_drive_slot_info", "serverscom_host_drive_capacity",
+		"serverscom_host_feature_enabled", "serverscom_host_feature_status")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCollectorIsConsistent(t *testing.T) {
 	// CollectAndLint catches duplicate series and inconsistent label sets.
-	problems, err := testutil.CollectAndLint(New(testStore(), []string{"*"}))
+	problems, err := testutil.CollectAndLint(New(testStore(), []string{"*"}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,5 +137,33 @@ func TestSanitizeLabelName(t *testing.T) {
 		if got := sanitizeLabelName(in); got != want {
 			t.Errorf("sanitizeLabelName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestServicePricesAreSummedByNameAndType(t *testing.T) {
+	store := cache.NewStore("", slog.New(slog.DiscardHandler))
+	store.Update(func(s *cache.Snapshot) {
+		s.Hosts["h1"] = &cache.Host{
+			Server: api.DedicatedServer{ID: "h1", Title: "node-1", LocationCode: "ams1", RackID: "r1"},
+			Details: &cache.HostDetails{Fetched: map[cache.Collector]time.Time{}, Services: []api.Service{
+				{Name: "Server hardware", Type: "server_base", Currency: "USD", Total: 250, Subtotal: 250},
+				{Name: "Additional IPv4", Type: "ip_network", Currency: "USD", Total: 12, Subtotal: 10, Tax: 2},
+				{Name: "Additional IPv4", Type: "ip_network", Currency: "USD", Total: 12, Subtotal: 10, Tax: 2},
+			}},
+		}
+	})
+	expected := `
+# HELP serverscom_host_service_price Price of a billed service of the server in the current billing period, tax included, in the given currency. Services with the same name and type are summed. Updated by the API once a day.
+# TYPE serverscom_host_service_price gauge
+serverscom_host_service_price{currency="USD",host_id="h1",location="ams1",rack="r1",service="Additional IPv4",title="node-1",type="ip_network"} 24
+serverscom_host_service_price{currency="USD",host_id="h1",location="ams1",rack="r1",service="Server hardware",title="node-1",type="server_base"} 250
+# HELP serverscom_host_service_tax Tax of a billed service of the server in the current billing period, in the given currency.
+# TYPE serverscom_host_service_tax gauge
+serverscom_host_service_tax{currency="USD",host_id="h1",location="ams1",rack="r1",service="Additional IPv4",title="node-1",type="ip_network"} 4
+serverscom_host_service_tax{currency="USD",host_id="h1",location="ams1",rack="r1",service="Server hardware",title="node-1",type="server_base"} 0
+`
+	if err := testutil.CollectAndCompare(New(store, nil, nil), strings.NewReader(expected),
+		"serverscom_host_service_price", "serverscom_host_service_tax"); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,15 +1,23 @@
 // Package refresher keeps the cache up to date while spending as few API
 // requests as possible.
 //
-// Data is split into independent loops by how often it changes:
+// Every collector (API endpoint) has its own refresh interval:
 //
-//	hosts      the server list: power, statuses, labels, updated_at  (minutes)
-//	details    per-server drives, ports, networks, features, feeds   (hours, or when updated_at changes)
-//	l2         L2 segments with members and networks                  (tens of minutes)
-//	reference  locations, racks, uplink model catalogues              (a day)
+//	hosts         the server list: power, statuses, labels, updated_at
+//	host_details  all collectors of new servers and servers whose updated_at
+//	              changed, checked every hosts interval (outside the schedule)
+//	per server    configuration, drives, ports, networks, features, power-feeds,
+//	              services:
+//	              one queue per collector, oldest server first; every server
+//	              whose data is older than the interval is fetched right away,
+//	              one request after another
+//	account-wide  uplinks, l2-segments, reference
 //
-// All loops share one API client, whose pacer keeps the total request rate
-// within the configured budget.
+// When the intervals do not fit into 80% of the request budget, every loop
+// but the server list is stretched by the same factor; the list too if it
+// does not fit on its own (see demand.go). When
+// the budget window runs low anyway, those loops pause and leave the rest to
+// the server list and to new servers.
 package refresher
 
 import (
@@ -17,9 +25,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
-	"strings"
+	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -37,6 +45,7 @@ type API interface {
 	ListNetworks(ctx context.Context, serverID string) ([]api.Network, error)
 	ListFeatures(ctx context.Context, serverID string) ([]api.Feature, error)
 	ListPowerFeeds(ctx context.Context, serverID string) ([]api.PowerFeed, error)
+	ListServices(ctx context.Context, serverID string) ([]api.Service, error)
 	ListL2Segments(ctx context.Context) ([]api.L2Segment, error)
 	ListL2Members(ctx context.Context, segmentID string) ([]api.L2Member, error)
 	ListL2Networks(ctx context.Context, segmentID string) ([]api.Network, error)
@@ -44,37 +53,45 @@ type API interface {
 	ListRacks(ctx context.Context) ([]api.Rack, error)
 	ListUplinkModels(ctx context.Context, locationID, serverModelID int64) ([]api.UplinkModel, error)
 	RateLimit() api.RateLimit
+	BudgetRemaining() int
 }
 
 // Config holds refresh intervals.
 type Config struct {
-	// HostsInterval is how often the server list is fetched.
+	// HostsInterval is how often the server list is fetched. New and changed
+	// servers are downloaded on the same schedule.
 	HostsInterval time.Duration
 
-	// DetailsInterval is the maximum age of per-server details. Details of a
-	// server whose updated_at changed are refreshed on the next check, which
-	// runs every HostsInterval.
-	DetailsInterval time.Duration
+	// Intervals per collector; a missing entry is DefaultInterval.
+	Intervals map[cache.Collector]time.Duration
 
-	// FeaturesInterval is how often server features are re-fetched for all
-	// servers with details. Toggling a feature (e.g. disaggregated_*_ports
-	// or oob_public_access) does not change updated_at, so without this loop
-	// such changes would only show up after DetailsInterval. Zero disables it.
-	FeaturesInterval time.Duration
+	// Disabled collectors are not fetched.
+	Disabled cache.DisabledCollectors
 
-	// L2Interval is how often L2 segments are fetched.
-	L2Interval time.Duration
-
-	// ReferenceInterval is how often locations, racks and uplink catalogues
-	// are fetched.
-	ReferenceInterval time.Duration
-
-	// The API client settings below are used to estimate the request demand
-	// of the configuration and to recommend a budget and intervals.
+	// The API client settings below are used to stretch the intervals, to
+	// estimate the request demand and to recommend a budget.
 	PageSize      int
 	BudgetPerHour int
 	Reserve       int
 }
+
+// interval returns the configured interval of c.
+func (c Config) interval(collector cache.Collector) time.Duration {
+	if i, ok := c.Intervals[collector]; ok && i > 0 {
+		return i
+	}
+	return DefaultInterval(collector)
+}
+
+// Timing of the schedulers.
+const (
+	// recheckPeriod is the longest a loop sleeps before looking again: the
+	// stretch and the set of servers change while it waits.
+	recheckPeriod = time.Minute
+
+	// retryDelay is the pause after a failed run of an account-wide loop.
+	retryDelay = 5 * time.Minute
+)
 
 // Refresher runs the refresh loops.
 type Refresher struct {
@@ -86,11 +103,17 @@ type Refresher struct {
 	errors *prometheus.CounterVec
 	demand *demandMetrics
 
-	demandMu           sync.Mutex
-	lastRecommendation string // last logged recommendation, to log only changes
+	// effective holds the effective interval of every loop by name from the
+	// last estimate; nil until the first one, which means the configured ones.
+	effective atomic.Pointer[map[string]time.Duration]
+	paused    atomic.Bool // stretchable loops wait for the budget to reset
+
+	demandMu  sync.Mutex
+	lastState string // last logged demand state, to log only changes
 }
 
-// New creates a Refresher and registers its metrics.
+// New creates a Refresher, registers its metrics and drops cached data that
+// the configuration no longer refreshes.
 func New(client API, store *cache.Store, cfg Config, logger *slog.Logger, reg prometheus.Registerer) *Refresher {
 	r := &Refresher{
 		api:    client,
@@ -104,23 +127,100 @@ func New(client API, store *cache.Store, cfg Config, logger *slog.Logger, reg pr
 	}
 	reg.MustRegister(r.errors)
 	r.demand = newDemandMetrics(reg)
-	// Log the first estimate even when it has no recommendation.
-	r.lastRecommendation = "-"
+	r.lastState = "-" // log the first estimate even when it has no recommendation
+	r.prepareCache()
 	return r
+}
+
+func (r *Refresher) enabled(c cache.Collector) bool { return r.cfg.Disabled.Enabled(c) }
+
+// interval returns the effective interval of c: the configured one,
+// stretched when the loops do not fit into the budget.
+func (r *Refresher) interval(c cache.Collector) time.Duration {
+	return r.effectiveInterval(string(c), r.cfg.interval(c))
+}
+
+// hostsInterval returns the effective interval of the server list.
+func (r *Refresher) hostsInterval() time.Duration {
+	return r.effectiveInterval(string(cache.ResourceHosts), r.cfg.HostsInterval)
+}
+
+// effectiveInterval returns the interval of loop from the last estimate, or
+// configured before the first one.
+func (r *Refresher) effectiveInterval(loop string, configured time.Duration) time.Duration {
+	if m := r.effective.Load(); m != nil {
+		if d, ok := (*m)[loop]; ok && d > 0 {
+			return d
+		}
+	}
+	return configured
+}
+
+// prepareCache removes data of disabled collectors, e.g. loaded from a cache
+// file written with them on, and refresh timestamps of resources that no
+// longer run, so staleness alerts do not fire for them.
+func (r *Refresher) prepareCache() {
+	active := map[cache.Resource]bool{cache.ResourceHosts: true, cache.ResourceHostDetails: true}
+	for _, c := range cache.Collectors {
+		if r.enabled(c) {
+			active[cache.Resource(c)] = true
+		}
+	}
+
+	r.store.Update(func(s *cache.Snapshot) {
+		for resource := range s.LastSuccess {
+			if !active[resource] {
+				delete(s.LastSuccess, resource)
+			}
+		}
+		if !r.enabled(cache.CollectorL2Segments) {
+			s.Segments = map[string]*cache.Segment{}
+		}
+		if !r.enabled(cache.CollectorUplinks) {
+			s.Uplinks = map[string]*cache.UplinkModels{}
+		}
+		for id, host := range s.Hosts {
+			if host.Details == nil {
+				continue
+			}
+			details := *host.Details // copy-on-write
+			details.Fetched = maps.Clone(details.Fetched)
+			for _, c := range cache.HostCollectors {
+				if !r.enabled(c) {
+					clearHostCollector(&details, c)
+					delete(details.Fetched, c)
+				}
+			}
+			s.Hosts[id] = &cache.Host{Server: host.Server, Details: &details}
+		}
+	})
+}
+
+// clearHostCollector drops the data of collector c from details.
+func clearHostCollector(d *cache.HostDetails, c cache.Collector) {
+	copyHostCollector(d, &cache.HostDetails{}, c)
+}
+
+// copyHostCollector copies the data of collector c from src to dst.
+func copyHostCollector(dst, src *cache.HostDetails, c cache.Collector) {
+	switch c {
+	case cache.CollectorDrives:
+		dst.DriveSlots = src.DriveSlots
+	case cache.CollectorPorts:
+		dst.Connections = src.Connections
+	case cache.CollectorNetworks:
+		dst.Networks = src.Networks
+	case cache.CollectorFeatures:
+		dst.Features = src.Features
+	case cache.CollectorPowerFeeds:
+		dst.PowerFeeds = src.PowerFeeds
+	case cache.CollectorServices:
+		dst.Services = src.Services
+	}
 }
 
 // Run starts all loops and blocks until ctx is cancelled.
 func (r *Refresher) Run(ctx context.Context) {
-	loops := []refreshLoop{
-		{cache.ResourceHosts, r.cfg.HostsInterval, r.refreshHosts},
-		{cache.ResourceHostDetails, r.cfg.HostsInterval, r.refreshDetails},
-		{cache.ResourceL2Segments, r.cfg.L2Interval, r.refreshL2Segments},
-		{cache.ResourceLocations, r.cfg.ReferenceInterval, r.refreshReference},
-	}
-	if r.cfg.FeaturesInterval > 0 {
-		loops = append(loops, refreshLoop{cache.ResourceFeatures, r.cfg.FeaturesInterval, r.refreshFeatures})
-	}
-
 	snapshot := r.store.Snapshot()
 	withDetails := 0
 	for _, host := range snapshot.Hosts {
@@ -128,58 +228,87 @@ func (r *Refresher) Run(ctx context.Context) {
 			withDetails++
 		}
 	}
-	r.logger.Info("Refresher started",
+	attrs := []any{
 		"cached_hosts", len(snapshot.Hosts), "cached_host_details", withDetails,
-		"hosts_interval", r.cfg.HostsInterval, "details_interval", r.cfg.DetailsInterval,
-		"features_interval", r.cfg.FeaturesInterval,
-		"l2_interval", r.cfg.L2Interval, "reference_interval", r.cfg.ReferenceInterval)
+		"disabled_collectors", fmt.Sprint(r.cfg.Disabled.List()), "hosts_interval", r.cfg.HostsInterval,
+	}
+	for _, c := range cache.Collectors {
+		if r.enabled(c) {
+			attrs = append(attrs, string(c)+"_interval", formatDuration(r.cfg.interval(c)))
+		}
+	}
+	r.logger.Info("Refresher started", attrs...)
 
-	// On a cold start (no cache file) fetch racks first: host metrics carry the
-	// rack name, and without the rack list they would briefly expose rack IDs,
-	// leaving stale values in Grafana's rack variable. Costs two requests.
-	if r.store.Snapshot().LastSuccess[cache.ResourceRacks].IsZero() {
+	// With a cache file the estimate is available before the first API
+	// request, which may have to wait for the rate limit.
+	r.updateDemand()
+
+	// On a cold start fetch racks first: host metrics carry the rack name, and
+	// without the rack list they would briefly expose rack IDs, leaving stale
+	// values in Grafana's rack variable. Costs two requests.
+	if snapshot.LastSuccess[cache.Resource(cache.CollectorReference)].IsZero() {
 		if err := r.refreshReference(ctx); err != nil {
-			r.errors.WithLabelValues(string(cache.ResourceLocations)).Inc()
+			r.errors.WithLabelValues(string(cache.CollectorReference)).Inc()
 			r.logger.Warn("Initial reference refresh failed", "err", err)
 		}
 	}
 
-	// Fetch the server list once before starting the loops, so the details
-	// loop has hosts to work on right away. On failure the hosts loop retries.
+	// Fetch the server list once before starting the loops, so the other
+	// loops have servers and the stretch right away.
 	if err := r.refreshHosts(ctx); err != nil {
 		r.errors.WithLabelValues(string(cache.ResourceHosts)).Inc()
 		r.logger.Warn("Initial hosts refresh failed", "err", err)
 	}
 
+	hostsInterval := r.hostsInterval
+	loops := []func(){
+		func() { r.loop(ctx, cache.ResourceHosts, hostsInterval, false, r.refreshHosts) },
+		func() { r.loop(ctx, cache.ResourceHostDetails, hostsInterval, false, r.refreshDetails) },
+	}
+	for _, c := range cache.HostCollectors {
+		if r.enabled(c) {
+			loops = append(loops, func() { r.hostLoop(ctx, c) })
+		}
+	}
+	for c, refresh := range map[cache.Collector]func(context.Context) error{
+		cache.CollectorUplinks:    r.refreshUplinks,
+		cache.CollectorL2Segments: r.refreshL2Segments,
+		cache.CollectorReference:  r.refreshReference,
+	} {
+		if r.enabled(c) {
+			interval := func() time.Duration { return r.interval(c) }
+			loops = append(loops, func() { r.loop(ctx, cache.Resource(c), interval, true, refresh) })
+		}
+	}
+
 	var wg sync.WaitGroup
 	for _, loop := range loops {
-		wg.Go(func() {
-			r.loop(ctx, loop)
-		})
+		wg.Go(loop)
 	}
 	wg.Wait()
 }
 
-// refreshLoop is one periodically refreshed group of data.
-type refreshLoop struct {
-	resource cache.Resource
-	interval time.Duration
-	refresh  func(context.Context) error
-}
-
-// loop calls refresh every interval. The first run is delayed if the
-// resource was refreshed recently, e.g. according to a loaded cache file.
-func (r *Refresher) loop(ctx context.Context, l refreshLoop) {
-	resource, interval, refresh := l.resource, l.interval, l.refresh
-	delay := time.Until(r.store.Snapshot().LastSuccess[resource].Add(interval))
-
+// loop runs refresh whenever the last success of resource is older than
+// interval, and retries failures after retryDelay at the latest. Stretchable
+// loops wait while the budget window is running low.
+func (r *Refresher) loop(ctx context.Context, resource cache.Resource, interval func() time.Duration, stretchable bool,
+	refresh func(context.Context) error) {
+	var lastFailure time.Time
 	for {
-		if delay > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
+		due := r.store.Snapshot().LastSuccess[resource].Add(interval())
+		if !lastFailure.IsZero() {
+			if retry := lastFailure.Add(min(retryDelay, interval())); retry.After(due) {
+				due = retry
 			}
+		}
+		if wait := time.Until(due); wait > 0 {
+			if !sleep(ctx, min(wait, recheckPeriod)) {
+				return
+			}
+			continue
+		}
+		if stretchable && !r.waitForBudget(ctx) {
+			return
 		}
 
 		start := time.Now()
@@ -188,15 +317,99 @@ func (r *Refresher) loop(ctx context.Context, l refreshLoop) {
 		case ctx.Err() != nil:
 			return
 		case err != nil:
+			lastFailure = time.Now()
 			r.errors.WithLabelValues(string(resource)).Inc()
-			r.logger.Warn("Refresh failed or incomplete, cached data is kept where needed", "resource", resource, "err", err)
+			r.logger.Warn("Refresh failed or incomplete, cached data is kept", "resource", resource, "err", err)
 		default:
 			r.logger.Debug("Refresh finished", "resource", resource, "duration", time.Since(start).Round(time.Millisecond))
 		}
-
-		delay = interval
-		r.logger.Debug("Next refresh scheduled", "resource", resource, "in", delay)
 	}
+}
+
+// hostLoop refreshes collector c of every server with details, oldest first:
+// every server whose data is older than the interval is fetched right away,
+// one request after another, then the loop sleeps until the next one is due.
+func (r *Refresher) hostLoop(ctx context.Context, c cache.Collector) {
+	resource := cache.Resource(c)
+	for {
+		target, servers := r.oldestHost(c)
+		wait := recheckPeriod
+		if servers > 0 {
+			wait = time.Until(target.fetchedAt.Add(r.interval(c)))
+		}
+		if wait > 0 {
+			if !sleep(ctx, min(wait, recheckPeriod)) {
+				return
+			}
+			continue
+		}
+		if !r.waitForBudget(ctx) {
+			return
+		}
+
+		err := r.refreshHostCollector(ctx, c, target.id)
+		switch {
+		case ctx.Err() != nil:
+			return
+		case err == nil:
+			r.markSuccess(resource)
+		case api.IsNotFound(err):
+			// Released; the next hosts refresh drops it.
+			r.logger.Info("Host disappeared during refresh", "host_id", target.id, "title", target.title, "resource", c)
+		case api.IsRateLimited(err):
+			r.logger.Warn("Refresh interrupted by the API rate limit", "resource", c)
+			if !sleep(ctx, recheckPeriod) {
+				return
+			}
+		default:
+			r.errors.WithLabelValues(string(resource)).Inc()
+			r.logger.Warn("Cannot refresh host data, keeping cached data", "host_id", target.id, "title", target.title,
+				"resource", c, "err", err)
+		}
+	}
+}
+
+// hostTarget is a server waiting for a refresh.
+type hostTarget struct {
+	id, title string
+	fetchedAt time.Time // zero if never fetched
+}
+
+// oldestHost returns the server with details whose collector c was fetched
+// longest ago, and the number of servers with details.
+func (r *Refresher) oldestHost(c cache.Collector) (oldest hostTarget, servers int) {
+	for id, host := range r.store.Snapshot().Hosts {
+		if host.Details == nil {
+			continue // new servers are downloaded by refreshDetails
+		}
+		fetchedAt := host.Details.Fetched[c]
+		if servers == 0 || fetchedAt.Before(oldest.fetchedAt) || (fetchedAt.Equal(oldest.fetchedAt) && id < oldest.id) {
+			oldest = hostTarget{id: id, title: host.Server.Title, fetchedAt: fetchedAt}
+		}
+		servers++
+	}
+	return oldest, servers
+}
+
+// waitForBudget blocks while the budget window has no more than the headroom
+// (1 - budgetShare) left, which is kept for the server list and new servers.
+// It returns false when ctx is cancelled.
+func (r *Refresher) waitForBudget(ctx context.Context) bool {
+	headroom := int(float64(r.cfg.BudgetPerHour) * (1 - budgetShare))
+	for r.api.BudgetRemaining() <= headroom {
+		if r.paused.CompareAndSwap(false, true) {
+			r.logger.Info("Request budget is running low, refresh loops wait for the reset; "+
+				"the server list and new servers keep going",
+				"budget_remaining", r.api.BudgetRemaining(), "kept", headroom)
+		}
+		if !sleep(ctx, recheckPeriod) {
+			return false
+		}
+	}
+	if r.paused.CompareAndSwap(true, false) {
+		r.logger.Info("Request budget reset, refresh loops resume")
+	}
+	return true
 }
 
 // markSuccess records a successful refresh of resources.
@@ -243,18 +456,17 @@ func (r *Refresher) refreshHosts(ctx context.Context) error {
 		log = r.logger.Info
 	}
 	log("Hosts refreshed", "hosts", len(servers), "added", added, "removed", removed, "changed", changed,
-		"pending_details", len(r.hostsDueForDetails(time.Now())))
+		"pending_details", len(r.hostsDueForDetails()))
 	r.updateDemand()
 	return nil
 }
 
-// refreshDetails downloads details of hosts that are new, changed or stale.
-// Hosts are processed one by one and published as soon as they are ready,
+// refreshDetails downloads all collectors of new and changed servers.
+// Servers are processed one by one and published as soon as they are ready,
 // so a long initial download fills the dashboard progressively.
 func (r *Refresher) refreshDetails(ctx context.Context) error {
-	due := r.hostsDueForDetails(time.Now())
+	due := r.hostsDueForDetails()
 	if len(due) == 0 {
-		r.logger.Debug("Host details are up to date")
 		r.markSuccess(cache.ResourceHostDetails)
 		return nil
 	}
@@ -263,8 +475,7 @@ func (r *Refresher) refreshDetails(ctx context.Context) error {
 	for _, host := range due {
 		reasons[host.reason]++
 	}
-	r.logger.Info("Refreshing host details", "hosts", len(due),
-		"new", reasons[dueNew], "changed", reasons[dueChanged], "stale", reasons[dueStale])
+	r.logger.Info("Downloading host details", "hosts", len(due), "new", reasons[dueNew], "changed", reasons[dueChanged])
 
 	start := time.Now()
 	var refreshed, partial, failed, gone int
@@ -278,16 +489,16 @@ func (r *Refresher) refreshDetails(ctx context.Context) error {
 		case api.IsNotFound(err):
 			// Released between listing and now; the next hosts refresh drops it.
 			gone++
-			r.logger.Info("Host disappeared during detail refresh", "host_id", host.id, "title", host.title)
+			r.logger.Info("Host disappeared during detail download", "host_id", host.id, "title", host.title)
 		case api.IsRateLimited(err):
-			r.logger.Warn("Host details refresh interrupted by the API rate limit, resuming on the next run",
+			r.logger.Warn("Host details download interrupted by the API rate limit, resuming on the next run",
 				"processed", i, "remaining", len(due)-i)
 			return err
 		case errors.Is(err, errPartialDetails):
-			partial++ // published without some sub-resources; already logged
+			partial++ // published without some collectors; already logged
 		default:
 			failed++
-			r.logger.Warn("Cannot refresh host details", "host_id", host.id, "title", host.title, "err", err)
+			r.logger.Warn("Cannot download host details", "host_id", host.id, "title", host.title, "err", err)
 		}
 
 		processed := i + 1
@@ -301,116 +512,123 @@ func (r *Refresher) refreshDetails(ctx context.Context) error {
 		r.logger.Info("Host details processed", progress...)
 	}
 
-	r.logger.Info("Host details refresh finished", "refreshed", refreshed, "partial", partial,
+	r.logger.Info("Host details download finished", "refreshed", refreshed, "partial", partial,
 		"failed", failed, "gone", gone, "duration", time.Since(start).Round(time.Second))
 
-	if partial+failed > 0 {
-		return errors.New("some host details could not be refreshed")
+	if failed > 0 {
+		return errors.New("some host details could not be downloaded")
 	}
+	// Partial downloads are published; the failed collectors are retried by
+	// their own loops.
 	r.markSuccess(cache.ResourceHostDetails)
 	return nil
 }
 
-// Reasons a host needs a detail refresh.
+// Reasons a server needs a full download.
 const (
 	dueNew     = "new"     // details were never downloaded
 	dueChanged = "changed" // updated_at of the server changed
-	dueStale   = "stale"   // details are older than DetailsInterval
 )
 
-// dueHost is a host waiting for a detail refresh.
+// dueHost is a server waiting for a full download.
 type dueHost struct {
-	id        string
-	title     string
-	reason    string
-	fetchedAt time.Time
+	id     string
+	title  string
+	reason string
 }
 
-// hostsDueForDetails returns hosts that need a detail refresh, oldest (or
-// never fetched) first.
-func (r *Refresher) hostsDueForDetails(now time.Time) []dueHost {
-	var due []dueHost
+// hostsDueForDetails returns new and changed servers, new ones first.
+func (r *Refresher) hostsDueForDetails() []dueHost {
+	var added, changed []dueHost
 	for id, host := range r.store.Snapshot().Hosts {
-		candidate := dueHost{id: id, title: host.Server.Title}
 		switch details := host.Details; {
 		case details == nil:
-			candidate.reason = dueNew
+			added = append(added, dueHost{id, host.Server.Title, dueNew})
 		case !details.SourceUpdatedAt.Equal(host.Server.UpdatedAt):
-			candidate.reason, candidate.fetchedAt = dueChanged, details.FetchedAt
-		case now.Sub(details.FetchedAt) >= r.cfg.DetailsInterval:
-			candidate.reason, candidate.fetchedAt = dueStale, details.FetchedAt
-		default:
-			continue
+			changed = append(changed, dueHost{id, host.Server.Title, dueChanged})
 		}
-		due = append(due, candidate)
 	}
-
-	slices.SortFunc(due, func(a, b dueHost) int { return a.fetchedAt.Compare(b.fetchedAt) })
-	return due
+	return append(added, changed...)
 }
 
-// errPartialDetails reports that some sub-resources of a host could not be
-// fetched; the host was still published with everything else.
-var errPartialDetails = errors.New("some host sub-resources could not be fetched")
+// errPartialDetails reports that some collectors of a server could not be
+// fetched; the server was still published with everything else.
+var errPartialDetails = errors.New("some host collectors could not be fetched")
 
-// refreshHostDetails downloads and publishes details of one host.
+// fetchHostCollector fetches collector c (not configuration) of a server and
+// returns a function that stores the result in details.
+func (r *Refresher) fetchHostCollector(ctx context.Context, c cache.Collector, id string) (func(*cache.HostDetails), error) {
+	switch c {
+	case cache.CollectorDrives:
+		v, err := r.api.ListDriveSlots(ctx, id)
+		return func(d *cache.HostDetails) { d.DriveSlots = v }, err
+	case cache.CollectorPorts:
+		v, err := r.api.ListConnections(ctx, id)
+		return func(d *cache.HostDetails) { d.Connections = v }, err
+	case cache.CollectorNetworks:
+		v, err := r.api.ListNetworks(ctx, id)
+		return func(d *cache.HostDetails) { d.Networks = v }, err
+	case cache.CollectorFeatures:
+		v, err := r.api.ListFeatures(ctx, id)
+		return func(d *cache.HostDetails) { d.Features = v }, err
+	case cache.CollectorPowerFeeds:
+		v, err := r.api.ListPowerFeeds(ctx, id)
+		return func(d *cache.HostDetails) { d.PowerFeeds = v }, err
+	case cache.CollectorServices:
+		v, err := r.api.ListServices(ctx, id)
+		return func(d *cache.HostDetails) { d.Services = v }, err
+	}
+	return nil, fmt.Errorf("unknown host collector %q", c)
+}
+
+// refreshHostDetails downloads all enabled collectors of one server.
 //
-// Sub-resources are independent: if one of them fails (e.g. an endpoint that
-// returns 404 or 403 for some servers), the others are still published and
-// the failed one keeps its previously cached value.
+// Collectors are independent: if one of them fails (e.g. an endpoint that
+// returns 403 for some servers), the others are still published and the
+// failed one keeps its previously cached value until its own loop retries it.
 func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 	server, err := r.api.GetDedicatedServer(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	var previous cache.HostDetails
-	if old, ok := r.store.Snapshot().Hosts[id]; ok && old.Details != nil {
-		previous = *old.Details
-	}
-
 	details := &cache.HostDetails{
 		SourceUpdatedAt: server.UpdatedAt,
 		Configuration:   server.ConfigurationDetails,
+		Fetched:         map[cache.Collector]time.Time{cache.CollectorConfiguration: time.Now()},
 	}
-
-	subResources := []struct {
-		name  string
-		fetch func() error
-		keep  func() // restores the previously cached value on failure
-	}{
-		{"drive_slots",
-			func() (err error) { details.DriveSlots, err = r.api.ListDriveSlots(ctx, id); return err },
-			func() { details.DriveSlots = previous.DriveSlots }},
-		{"connections",
-			func() (err error) { details.Connections, err = r.api.ListConnections(ctx, id); return err },
-			func() { details.Connections = previous.Connections }},
-		{"networks",
-			func() (err error) { details.Networks, err = r.api.ListNetworks(ctx, id); return err },
-			func() { details.Networks = previous.Networks }},
-		{"features",
-			func() (err error) { details.Features, err = r.api.ListFeatures(ctx, id); return err },
-			func() { details.Features = previous.Features }},
-		{"power_feeds",
-			func() (err error) { details.PowerFeeds, err = r.api.ListPowerFeeds(ctx, id); return err },
-			func() { details.PowerFeeds = previous.PowerFeeds }},
+	var previous *cache.HostDetails
+	if old, ok := r.store.Snapshot().Hosts[id]; ok {
+		previous = old.Details
 	}
 
 	partial := false
-	for _, sub := range subResources {
-		err := sub.fetch()
+	fetched := []cache.Collector{cache.CollectorConfiguration}
+	for _, c := range cache.HostCollectors {
+		if c == cache.CollectorConfiguration || !r.enabled(c) {
+			continue
+		}
+		store, err := r.fetchHostCollector(ctx, c, id)
 		switch {
 		case err == nil:
+			store(details)
+			details.Fetched[c] = time.Now()
+			fetched = append(fetched, c)
 		case api.IsRateLimited(err), ctx.Err() != nil:
 			return err
 		default:
+			// Keep the previous value with its timestamp. Without one the
+			// collector counts as never fetched and its loop picks it first.
 			partial = true
-			sub.keep()
-			r.logger.Warn("Cannot fetch host sub-resource, keeping cached data",
-				"host_id", id, "resource", sub.name, "err", err)
+			if previous != nil {
+				if fetchedAt, ok := previous.Fetched[c]; ok {
+					copyHostCollector(details, previous, c)
+					details.Fetched[c] = fetchedAt
+				}
+			}
+			r.logger.Warn("Cannot fetch host data, keeping cached data", "host_id", id, "resource", c, "err", err)
 		}
 	}
-	details.FetchedAt = time.Now()
 
 	r.store.Update(func(s *cache.Snapshot) {
 		if _, ok := s.Hosts[id]; !ok {
@@ -418,20 +636,18 @@ func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 		}
 		// The single-object response is fresher than the list entry.
 		s.Hosts[id] = &cache.Host{Server: *server, Details: details}
-	})
-
-	// A host of a server model we have not seen yet needs its uplink
-	// catalogue right away, not on the next daily reference refresh.
-	if cfg := server.ConfigurationDetails; cfg != nil && cfg.ServerModelID != 0 {
-		key := cache.UplinkKey(server.LocationID, cfg.ServerModelID)
-		if _, known := r.store.Snapshot().Uplinks[key]; !known {
-			if err := r.refreshUplinkModels(ctx, server.LocationID, cfg.ServerModelID); err != nil {
-				r.errors.WithLabelValues(string(cache.ResourceUplinks)).Inc()
-				r.logger.Warn("Cannot fetch uplink models", "location_id", server.LocationID,
-					"server_model_id", cfg.ServerModelID, "err", err)
+		// After a cold start the collectors fetched here count as refreshed,
+		// so their data age and staleness do not wait for their own loop's
+		// first pass. Later only their own loop marks them, so a loop that
+		// keeps failing still shows up as stale.
+		now := time.Now()
+		for _, c := range fetched {
+			if s.LastSuccess[cache.Resource(c)].IsZero() {
+				s.LastSuccess[cache.Resource(c)] = now
 			}
 		}
-	}
+	})
+	r.ensureUplinkModels(ctx, server)
 
 	if partial {
 		return errPartialDetails
@@ -439,101 +655,94 @@ func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 	return nil
 }
 
-// refreshFeatures re-fetches features of every server whose details are
-// cached. Servers without details are skipped: the details loop fetches their
-// features together with everything else.
-func (r *Refresher) refreshFeatures(ctx context.Context) error {
-	type target struct{ id, title string }
-	var targets []target
-	for id, host := range r.store.Snapshot().Hosts {
-		if host.Details != nil {
-			targets = append(targets, target{id, host.Server.Title})
+// refreshHostCollector refreshes one collector of a server with details.
+func (r *Refresher) refreshHostCollector(ctx context.Context, c cache.Collector, id string) error {
+	var server *api.DedicatedServer
+	var store func(*cache.HostDetails)
+	var err error
+	if c == cache.CollectorConfiguration {
+		if server, err = r.api.GetDedicatedServer(ctx, id); err == nil {
+			store = func(d *cache.HostDetails) { d.Configuration = server.ConfigurationDetails }
 		}
+	} else {
+		store, err = r.fetchHostCollector(ctx, c, id)
 	}
-	if len(targets) == 0 {
-		r.logger.Debug("No hosts with details yet, skipping features refresh")
-		return nil
-	}
-	slices.SortFunc(targets, func(a, b target) int { return strings.Compare(a.title, b.title) })
-
-	r.logger.Info("Refreshing host features", "hosts", len(targets))
-	start := time.Now()
-	logEvery := max(1, len(targets)/10) // about ten progress lines per run
-	var changed, failed int
-
-	for i, t := range targets {
-		features, err := r.api.ListFeatures(ctx, t.id)
-		switch {
-		case ctx.Err() != nil:
-			return ctx.Err()
-		case err == nil:
-			if r.storeFeatures(t.id, t.title, features) {
-				changed++
-			}
-		case api.IsNotFound(err):
-			r.logger.Info("Host disappeared during features refresh", "host_id", t.id, "title", t.title)
-		case api.IsRateLimited(err):
-			r.logger.Warn("Features refresh interrupted by the API rate limit, resuming on the next run",
-				"processed", i, "remaining", len(targets)-i)
-			return err
-		default:
-			failed++
-			r.logger.Warn("Cannot fetch host features, keeping cached data", "host_id", t.id, "title", t.title, "err", err)
+	if err != nil {
+		// Retry on its next turn, not right away. A released server (404)
+		// leaves the queue the same way until the next hosts refresh drops it.
+		if !api.IsRateLimited(err) && ctx.Err() == nil {
+			r.updateHostDetails(id, c, nil)
 		}
-
-		processed := i + 1
-		if remaining := len(targets) - processed; remaining > 0 && processed%logEvery == 0 {
-			perHost := time.Since(start) / time.Duration(processed)
-			r.logger.Info("Host features progress", "progress", fmt.Sprintf("%d/%d", processed, len(targets)),
-				"remaining", remaining, "eta", (perHost * time.Duration(remaining)).Round(time.Second))
-		}
+		return err
 	}
 
-	r.logger.Info("Host features refresh finished", "hosts", len(targets), "changed", changed,
-		"failed", failed, "duration", time.Since(start).Round(time.Second))
-	if failed > 0 {
-		return errors.New("some host features could not be refreshed")
+	r.updateHostDetails(id, c, store)
+	if server != nil {
+		r.ensureUplinkModels(ctx, server)
 	}
-	r.markSuccess(cache.ResourceFeatures)
 	return nil
 }
 
-// storeFeatures replaces the cached features of a host, logs every change and
-// reports whether anything changed.
-func (r *Refresher) storeFeatures(id, title string, features []api.Feature) bool {
-	changed := false
+// updateHostDetails applies store (if any) to the cached details of a server
+// and marks collector c as fetched now.
+func (r *Refresher) updateHostDetails(id string, c cache.Collector, store func(*cache.HostDetails)) {
 	r.store.Update(func(s *cache.Snapshot) {
 		host, ok := s.Hosts[id]
 		if !ok || host.Details == nil {
-			return // removed or not loaded by a concurrent refresh
+			return // removed or not downloaded by a concurrent refresh
 		}
-
-		old := map[string]string{}
-		for _, f := range host.Details.Features {
-			old[f.Name] = f.Status
+		details := *host.Details // copy-on-write
+		switch {
+		case store == nil:
+		case c == cache.CollectorFeatures:
+			r.storeFeatures(host, &details, store)
+		default:
+			store(&details)
 		}
-		for _, f := range features {
-			if previous, known := old[f.Name]; !known || previous != f.Status {
-				changed = true
-				r.logger.Info("Host feature changed", "host_id", id, "title", title,
-					"feature", f.Name, "from", previous, "to", f.Status)
-			}
-			delete(old, f.Name)
+		details.Fetched = maps.Clone(details.Fetched)
+		if details.Fetched == nil {
+			details.Fetched = map[cache.Collector]time.Time{}
 		}
-		for name, previous := range old {
-			changed = true
-			r.logger.Info("Host feature removed", "host_id", id, "title", title, "feature", name, "was", previous)
-		}
-		if !changed {
-			return
-		}
-
-		// Copy-on-write: published values must not be modified.
-		details := *host.Details
-		details.Features = features
+		details.Fetched[c] = time.Now()
 		s.Hosts[id] = &cache.Host{Server: host.Server, Details: &details}
 	})
-	return changed
+}
+
+// storeFeatures stores new features in details and logs every change.
+func (r *Refresher) storeFeatures(host *cache.Host, details *cache.HostDetails, store func(*cache.HostDetails)) {
+	old := map[string]string{}
+	for _, f := range details.Features {
+		old[f.Name] = f.Status
+	}
+	store(details)
+	id, title := host.Server.ID, host.Server.Title
+	for _, f := range details.Features {
+		if previous, known := old[f.Name]; !known || previous != f.Status {
+			r.logger.Info("Host feature changed", "host_id", id, "title", title,
+				"feature", f.Name, "from", previous, "to", f.Status)
+		}
+		delete(old, f.Name)
+	}
+	for name, previous := range old {
+		r.logger.Info("Host feature removed", "host_id", id, "title", title, "feature", name, "was", previous)
+	}
+}
+
+// ensureUplinkModels fetches the uplink catalogue of a server model seen for
+// the first time right away, not on the next uplinks refresh.
+func (r *Refresher) ensureUplinkModels(ctx context.Context, server *api.DedicatedServer) {
+	cfg := server.ConfigurationDetails
+	if !r.enabled(cache.CollectorUplinks) || cfg == nil || cfg.ServerModelID == 0 {
+		return
+	}
+	if _, known := r.store.Snapshot().Uplinks[cache.UplinkKey(server.LocationID, cfg.ServerModelID)]; known {
+		return
+	}
+	if err := r.refreshUplinkModels(ctx, server.LocationID, cfg.ServerModelID); err != nil {
+		r.errors.WithLabelValues(string(cache.CollectorUplinks)).Inc()
+		r.logger.Warn("Cannot fetch uplink models", "location_id", server.LocationID,
+			"server_model_id", cfg.ServerModelID, "err", err)
+	}
 }
 
 // refreshL2Segments replaces all L2 data. Partial results are discarded so
@@ -560,7 +769,7 @@ func (r *Refresher) refreshL2Segments(ctx context.Context) error {
 
 	r.store.Update(func(s *cache.Snapshot) {
 		s.Segments = segments
-		s.LastSuccess[cache.ResourceL2Segments] = time.Now()
+		s.LastSuccess[cache.Resource(cache.CollectorL2Segments)] = time.Now()
 	})
 
 	members := 0
@@ -572,7 +781,7 @@ func (r *Refresher) refreshL2Segments(ctx context.Context) error {
 	return nil
 }
 
-// refreshReference refreshes locations, racks and stale uplink catalogues.
+// refreshReference refreshes locations and racks.
 func (r *Refresher) refreshReference(ctx context.Context) error {
 	locations, err := r.api.ListLocations(ctx)
 	if err != nil {
@@ -592,19 +801,16 @@ func (r *Refresher) refreshReference(ctx context.Context) error {
 		for _, rack := range racks {
 			s.Racks[rack.ID] = rack
 		}
-		now := time.Now()
-		s.LastSuccess[cache.ResourceLocations] = now
-		s.LastSuccess[cache.ResourceRacks] = now
+		s.LastSuccess[cache.Resource(cache.CollectorReference)] = time.Now()
 	})
 	r.logger.Info("Reference data refreshed", "locations", len(locations), "racks", len(racks))
 	r.updateDemand()
-
-	return r.refreshStaleUplinkModels(ctx)
+	return nil
 }
 
-// refreshStaleUplinkModels refreshes uplink catalogues of server models that
-// are in use and older than the reference interval. Unused ones are dropped.
-func (r *Refresher) refreshStaleUplinkModels(ctx context.Context) error {
+// refreshUplinks refreshes uplink catalogues of server models that are in use
+// and older than the uplinks interval. Unused ones are dropped.
+func (r *Refresher) refreshUplinks(ctx context.Context) error {
 	snapshot := r.store.Snapshot()
 
 	type pair struct{ locationID, serverModelID int64 }
@@ -625,9 +831,10 @@ func (r *Refresher) refreshStaleUplinkModels(ctx context.Context) error {
 		}
 	})
 
+	interval := r.interval(cache.CollectorUplinks)
 	fetched := 0
 	for key, p := range inUse {
-		if catalogue, ok := snapshot.Uplinks[key]; ok && time.Since(catalogue.FetchedAt) < r.cfg.ReferenceInterval {
+		if catalogue, ok := snapshot.Uplinks[key]; ok && time.Since(catalogue.FetchedAt) < interval {
 			continue
 		}
 		if err := r.refreshUplinkModels(ctx, p.locationID, p.serverModelID); err != nil {
@@ -639,7 +846,8 @@ func (r *Refresher) refreshStaleUplinkModels(ctx context.Context) error {
 		r.logger.Info("Uplink model catalogues refreshed", "catalogues", fetched, "in_use", len(inUse))
 	}
 
-	r.markSuccess(cache.ResourceUplinks)
+	r.markSuccess(cache.Resource(cache.CollectorUplinks))
+	r.updateDemand()
 	return nil
 }
 
@@ -656,4 +864,14 @@ func (r *Refresher) refreshUplinkModels(ctx context.Context, locationID, serverM
 		}
 	})
 	return nil
+}
+
+// sleep waits for d and reports false if ctx was cancelled meanwhile.
+func sleep(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }

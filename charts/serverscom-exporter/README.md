@@ -67,19 +67,19 @@ defaults. Other flags go to `extraArgs`.
 | `config.requestsPerHour` | `--api.requests-per-hour` |
 | `config.ratelimitReserve` | `--api.ratelimit-reserve` |
 | `config.refresh.hostsInterval` | `--refresh.hosts-interval` |
-| `config.refresh.detailsInterval` | `--refresh.details-interval` |
-| `config.refresh.featuresInterval` | `--refresh.features-interval` |
-| `config.refresh.l2Interval` | `--refresh.l2-interval` |
-| `config.refresh.referenceInterval` | `--refresh.reference-interval` |
+| `config.refresh.<collector>Interval` | `--refresh.<collector>-interval` (configuration, drives, ports, networks, features, powerFeeds, services, uplinks, l2Segments, reference); defaults: features and powerFeeds `15m`, l2Segments `1h`, reference `6h`, the rest `24h` |
 | `config.hostLabels` | `--collector.host-labels` |
+| `config.extraLabels` | `--label=<name>=<value>` for each entry |
+| `config.collectors.<name>` | `--no-collector.<name>` when `false` (drives, ports, networks, features, power-feeds, services, uplinks, l2-segments) |
 | `config.apiUrl`, `apiTimeout`, `apiPageSize` | `--api.url`, `--api.timeout`, `--api.page-size` |
 | `config.cacheSaveInterval` | `--cache.save-interval` |
 | `config.metricsPath` | `--web.telemetry-path` |
-| `config.logLevel`, `logFormat` | `--log.level`, `--log.format` |
+| `config.logLevel`, `logFormat` | `--log.level`, `--log.format` (`json` by default) |
 
-The exporter logs whether its request budget fits the number of servers and
-which flags to change if not (see the
+The exporter logs whether the refresh intervals fit its request budget,
+stretches them if not and recommends a budget (see the
 [exporter README](../../src/README.md#demand-estimate-and-recommendations)).
+The pod does not start if the cache file on the volume cannot be written.
 
 ### TLS and basic auth
 
@@ -136,6 +136,5 @@ with `promtool check rules`.
 
 ## Grafana dashboard
 
-The dashboard in [`grafana/`](../../grafana/README.md) is a v2 resource and
-cannot be provisioned with ConfigMaps / the Grafana sidecar, so the chart does
-not ship it. Import it as described there.
+The chart does not manage Grafana. The dashboard is in
+[`grafana/`](../../grafana/README.md).

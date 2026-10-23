@@ -33,26 +33,49 @@ config:
   requestsPerHour: ""
   # --api.ratelimit-reserve: pause when the account-wide remaining drops to it.
   ratelimitReserve: ""
+  # Refresh intervals. When they do not fit into 80% of requestsPerHour, the
+  # exporter stretches them all by the same factor. Empty keeps the default.
   refresh:
-    # --refresh.hosts-interval
+    # --refresh.hosts-interval (2m): server list, new and changed servers
     hostsInterval: ""
-    # --refresh.details-interval
-    detailsInterval: ""
-    # --refresh.features-interval ("0" disables)
+    # --refresh.<collector>-interval; defaults: features and powerFeeds 15m,
+    # l2Segments 1h, reference 6h, the rest 24h
+    configurationInterval: ""
+    drivesInterval: ""
+    portsInterval: ""
+    networksInterval: ""
     featuresInterval: ""
-    # --refresh.l2-interval
-    l2Interval: ""
-    # --refresh.reference-interval
+    powerFeedsInterval: ""
+    servicesInterval: ""
+    uplinksInterval: ""
+    l2SegmentsInterval: ""
     referenceInterval: ""
   # --cache.save-interval
   cacheSaveInterval: ""
   # --collector.host-labels: comma-separated label keys, "*" for all.
   hostLabels: ""
+  # --label: extra labels added to every metric, e.g. {account: prod}.
+  # Names must not clash with the exporter's own labels (host_id, location,
+  # loop, ...) or start with label_; the exporter refuses to start otherwise.
+  extraLabels: {}
+  # Optional collectors; false adds --no-collector.<name>. A disabled
+  # collector is neither fetched from the API nor exposed.
+  collectors:
+    drives: true
+    ports: true
+    networks: true
+    # Also needed for serverscom_host_uplink_aggregated.
+    features: true
+    power-feeds: true
+    # Prices of billed services (serverscom_host_service_*).
+    services: true
+    uplinks: true
+    l2-segments: true
   # --web.telemetry-path
   metricsPath: /metrics
   # --log.level: debug, info, warn, error
   logLevel: ""
-  # --log.format: logfmt, json
+  # --log.format: json (default), logfmt
   logFormat: ""
 
 # Additional exporter flags, e.g. ["--api.timeout=1m"].

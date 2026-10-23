@@ -12,43 +12,55 @@ the CLI and everything else using the same account. The exporter therefore
 never calls the API during a scrape. Background loops keep an in-memory cache,
 and `/metrics` only renders the current snapshot.
 
-| Loop      | Data                                                         | Default interval                              |
-|-----------|--------------------------------------------------------------|-----------------------------------------------|
-| hosts     | server list: statuses, power, labels, `updated_at`            | `--refresh.hosts-interval=2m`                 |
-| details   | drives, ports, networks, features, power feeds, configuration | `--refresh.details-interval=12h`, or as soon as `updated_at` changes |
-| features  | server features only (port aggregation, OOB public access)    | `--refresh.features-interval=1h`, one request per server |
-| l2        | L2 segments, members, networks                                | `--refresh.l2-interval=15m`                   |
-| reference | locations, racks, uplink model catalogues                     | `--refresh.reference-interval=24h`            |
+| Loop          | Data                                                        | Default interval |
+|---------------|-------------------------------------------------------------|------------------|
+| hosts         | server list; new and changed servers are downloaded fully   | `2m`             |
+| features, power-feeds | split bonding, OOB public access, rescue mode; power feeds | `15m`      |
+| l2-segments   | L2 segments, members, networks                              | `1h`             |
+| reference     | locations and racks                                         | `6h`             |
+| configuration, drives, ports, networks, services, uplinks | inventory, prices, uplink catalogues | `24h` |
+
+Each is set with `--refresh.<name>-interval`. When the intervals need more
+than 80% of `--api.requests-per-hour`, every loop but the server list is
+stretched by the same factor (the list too if it does not fit on its own),
+see `serverscom_exporter_refresh_interval_stretch_factor`. A pass of a
+per-server collector refreshes every server whose data is older than the
+interval, one request after another.
 
 ### Request limits
 
 Two limits apply, and the exporter never delays requests while both have room:
 
-- **Its own budget**, `--api.requests-per-hour` (default 1000). Counted like
-  the API limit: a window opens with the first request and resets an hour
-  later. When the window is used up, the exporter logs a warning, sets
+- **Its own budget**, `--api.requests-per-hour` (default 1000). The window
+  follows the account window (`X-RateLimit-Reset`) and starts over when it
+  resets. When the window is used up, the exporter logs a warning, sets
   `serverscom_api_budget_exhausted` and waits for the reset.
 - **The account limit** (`X-RateLimit-*`). When `X-RateLimit-Remaining` drops
   to `--api.ratelimit-reserve` (default 300), the exporter waits until the
   account window resets, leaving the rest to Terraform, the CLI and others.
-  A 429 response pauses it as well.
+  A 429 response pauses it as well (`serverscom_api_ratelimit_paused`). The
+  last state, with the requests spent in the budget window, is kept in the
+  cache file, so a restart neither sends a request into a used-up window nor
+  gets a fresh budget in the same window.
 
 ### Demand estimate and recommendations
 
 From the number of servers, segments and racks and the configured intervals,
-the exporter estimates how many requests per hour it needs and how many a full
-download costs (e.g. after a start without a cache file). It exposes the
-estimate as metrics and, whenever the recommendation changes, logs whether the
-configuration fits, with the flags to change if not:
+the exporter estimates how many requests per hour it needs, how far the
+intervals are stretched and how many requests a full download costs (e.g.
+after a start without a cache file). It exposes the estimate as metrics and
+logs it whenever it changes:
 
 ```
-level=WARN msg="API demand does not fit into the request budget; the exporter will wait for budget resets"
-  requests_per_hour=538 full_refresh_requests=243 budget_per_hour=500 ... recommended="--api.requests-per-hour=700"
+level=WARN msg="Refresh intervals do not fit into the request budget and are stretched; raise the budget to keep them"
+  stretch=1.3 requests_per_hour=400 configured_requests_per_hour=520 budget_per_hour=500 ... recommended="--api.requests-per-hour=650"
 ```
 
-The recommended budget is the estimate with 25% headroom, at least one full
-download, and at most the account limit minus the reserve. If even that is not
-enough, the recommended refresh intervals are raised proportionally.
+The recommended budget fits the configured intervals into 80% of it, covers
+one full download, and is at most the account limit minus the reserve.
+`--estimate` prints the same for given flags and exits (JSON, or a table with
+`--log.format=logfmt`); with a token it reads the sizes from the API with a
+few requests, otherwise from `--cache.file` or the `--estimate.*` flags.
 
 With `--cache.file` the cache is written to disk. After a restart the exporter
 serves full metrics immediately and only refetches what is due.
@@ -87,9 +99,10 @@ labels, so dashboards can filter by location and rack without joins.
 | `serverscom_host_network_info` | Networks attached to the server |
 | `serverscom_host_feature_status` / `_feature_enabled` | Server features (e.g. `oob_public_access`, `disaggregated_*_ports`) |
 | `serverscom_host_power_feed_status` / `_power_feed_up` | Power feeds |
+| `serverscom_host_service_price`, `_service_subtotal`, `_service_tax` | Billed services of the current billing period by `service`, `type`, `currency`; services with the same name and type are summed |
 | `serverscom_host_uplink_info` / `_uplink_redundant` | Uplink model, speed, redundancy |
 | `serverscom_host_uplink_aggregated` | 1 if the uplink is redundant and not disaggregated, i.e. aggregated on the switch side |
-| `serverscom_host_details_last_refresh_timestamp_seconds` | When the server details were fetched |
+| `serverscom_host_details_last_refresh_timestamp_seconds` | When a per-server collector was last fetched, by `collector` |
 | `serverscom_l2_segment_info`, `_member_info`, `_network_info` | L2 segments, attached servers (mode, VLAN), networks |
 | `serverscom_location_info`, `serverscom_rack_info` | Reference data for dashboard variables |
 | `serverscom_exporter_last_refresh_success_timestamp_seconds` | Cache freshness by resource |
@@ -97,11 +110,13 @@ labels, so dashboards can filter by location and rack without joins.
 | `serverscom_api_requests_total`, `_request_duration_seconds` | Exporter API usage by endpoint |
 | `serverscom_api_ratelimit_limit`, `_remaining`, `_reset_timestamp_seconds` | Account-wide rate limit state |
 | `serverscom_api_ratelimit_reserve`, `serverscom_api_requests_budget_per_hour` | Configured reserve and request budget, for rate limit forecasts |
+| `serverscom_api_ratelimit_paused` | 1 while the exporter waits because the account reached the reserve |
 | `serverscom_api_budget_used`, `_remaining`, `_reset_timestamp_seconds` | Exporter's own hourly budget window (`--api.requests-per-hour`) |
 | `serverscom_api_budget_exhausted` / `_exhausted_total` | 1 while the current budget window is used up / number of used up windows |
-| `serverscom_exporter_requests_per_hour_estimated` | Requests per hour the configuration needs, by `loop` |
+| `serverscom_exporter_requests_per_hour_estimated` | Requests per hour of each `loop` at its effective interval |
 | `serverscom_exporter_full_refresh_requests_estimated` | Requests to download all information once |
-| `serverscom_exporter_refresh_interval_seconds` / `_recommended_seconds` | Configured / recommended refresh interval, by `loop` |
+| `serverscom_exporter_refresh_interval_seconds` / `_configured_seconds` | Effective / configured refresh interval, by `loop` |
+| `serverscom_exporter_refresh_interval_stretch_factor` | How far the intervals are stretched to fit the budget; 1 when they fit |
 | `serverscom_api_requests_per_hour_recommended` | Recommended `--api.requests-per-hour` |
 
 Grafana variables for location and rack:
@@ -117,9 +132,11 @@ label_values(serverscom_host_info{location=~"$location"}, rack)
   assume an enabled feature reports `activated`.
 - Units of `ram_size` and drive `capacity` (most likely GB).
 - Whether `updated_at` changes when drives or ports change. If it does not,
-  lower `--refresh.details-interval`. (Toggling a feature, e.g. port
-  disaggregation, does **not** change it; the features loop covers that.)
-- The maximum `per_page` value.
+  lower `--refresh.drives-interval` / `--refresh.ports-interval` (`24h` by
+  default). Toggling a feature, e.g. port disaggregation, does **not** change
+  it; `--refresh.features-interval` (`15m`) covers that.
+- The field types of `/hosts/dedicated_servers/{id}/services` (only an example
+  is documented) and whether `configuration_details` is in the server list.
 
 ## Development
 
@@ -129,6 +146,9 @@ All commands run from `src/`:
 go test -race ./...
 go build ./cmd/serverscom-exporter
 ```
+
+`make build` and `make image` in the repository root add the version
+information from git; see the [Makefile](../Makefile).
 
 ## Docker image
 

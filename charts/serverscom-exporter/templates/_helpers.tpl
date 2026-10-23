@@ -75,9 +75,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   (list "api.requests-per-hour" $c.requestsPerHour)
   (list "api.ratelimit-reserve" $c.ratelimitReserve)
   (list "refresh.hosts-interval" $c.refresh.hostsInterval)
-  (list "refresh.details-interval" $c.refresh.detailsInterval)
+  (list "refresh.configuration-interval" $c.refresh.configurationInterval)
+  (list "refresh.drives-interval" $c.refresh.drivesInterval)
+  (list "refresh.ports-interval" $c.refresh.portsInterval)
+  (list "refresh.networks-interval" $c.refresh.networksInterval)
   (list "refresh.features-interval" $c.refresh.featuresInterval)
-  (list "refresh.l2-interval" $c.refresh.l2Interval)
+  (list "refresh.power-feeds-interval" $c.refresh.powerFeedsInterval)
+  (list "refresh.services-interval" $c.refresh.servicesInterval)
+  (list "refresh.uplinks-interval" $c.refresh.uplinksInterval)
+  (list "refresh.l2-segments-interval" $c.refresh.l2SegmentsInterval)
   (list "refresh.reference-interval" $c.refresh.referenceInterval)
   (list "cache.save-interval" $c.cacheSaveInterval)
   (list "collector.host-labels" $c.hostLabels)
@@ -92,6 +98,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $value := index . 1 }}
 {{- if ne (toString $value) "" }}
 - {{ printf "--%s=%v" (index . 0) $value | quote }}
+{{- end }}
+{{- end }}
+{{- range $name, $value := $c.extraLabels }}
+- {{ printf "--label=%s=%v" $name $value | quote }}
+{{- end }}
+{{- range $name, $enabled := $c.collectors }}
+{{- if not $enabled }}
+- {{ printf "--no-collector.%s" $name | quote }}
 {{- end }}
 {{- end }}
 {{- if .Values.webConfig.enabled }}

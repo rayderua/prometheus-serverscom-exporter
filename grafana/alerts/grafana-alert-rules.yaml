@@ -279,11 +279,18 @@ groups:
       model:
         refId: query
         expr: |-
+          # Counted per host_id: a renamed server or one moved to another rack keeps
+          # its drives. Title, location and rack come from the current server list.
           (
-            count by (host_id, title, location, rack) (serverscom_host_drive_capacity)
-            or 0 * count by (host_id, title, location, rack) (serverscom_host_drive_capacity offset 1d)
+            (
+              count by (host_id) (serverscom_host_drive_capacity)
+              or 0 * count by (host_id) (serverscom_host_drive_capacity offset 1d)
+            )
+            < count by (host_id) (serverscom_host_drive_capacity offset 1d)
           )
-          < count by (host_id, title, location, rack) (serverscom_host_drive_capacity offset 1d) unless on (host_id) serverscom_host_labels{label_monitoring="off"}
+          * on (host_id) group_left (title, location, rack)
+            topk by (host_id) (1, max by (host_id, title, location, rack) (serverscom_host_info))
+          unless on (host_id) serverscom_host_labels{label_monitoring="off"}
         instant: true
         range: false
         datasource:
@@ -961,8 +968,7 @@ groups:
       model:
         refId: query
         expr: |-
-          sum by (job, instance) (serverscom_exporter_requests_per_hour_estimated)
-          > on (job, instance) serverscom_api_requests_budget_per_hour
+          serverscom_exporter_refresh_interval_stretch_factor > 1
         instant: true
         range: false
         datasource:
@@ -998,9 +1004,8 @@ groups:
     labels:
       severity: warning
     annotations:
-      summary: Servers.com exporter configuration needs more requests than its budget
-      description: The configured refresh intervals need about {{ $$values.query.Value | humanize }} requests per hour, more
-        than --api.requests-per-hour. The exporter log recommends the flags to change.
+      summary: Servers.com exporter refresh intervals are stretched to fit its budget
+      description: The configured refresh intervals need more than 80% of --api.requests-per-hour, so the exporter runs them {{ $$values.query.Value | humanize }} times less often. Raise the budget to serverscom_api_requests_per_hour_recommended or the intervals.
     isPaused: false
   - uid: sc-exporter-intervals-too-short
     title: ServerscomExporterIntervalsTooShort
@@ -1013,7 +1018,12 @@ groups:
       datasourceUid: ${SERVERSCOM_ALERTS_DATASOURCE_UID}
       model:
         refId: query
-        expr: serverscom_exporter_refresh_interval_recommended_seconds != serverscom_exporter_refresh_interval_seconds
+        expr: |-
+          sum by (job, instance) (
+            serverscom_exporter_requests_per_hour_estimated
+            * serverscom_exporter_refresh_interval_seconds / serverscom_exporter_refresh_interval_configured_seconds
+          )
+          > on (job, instance) 0.8 * (serverscom_api_ratelimit_limit - serverscom_api_ratelimit_reserve)
         instant: true
         range: false
         datasource:
@@ -1049,9 +1059,8 @@ groups:
     labels:
       severity: warning
     annotations:
-      summary: Servers.com {{ $$labels.loop }} refresh interval is too short for the account limit
-      description: The {{ $$labels.loop }} refresh interval needs more requests than the account limit leaves for the exporter;
-        the recommended interval is {{ $$values.query.Value | humanizeDuration }}.
+      summary: Servers.com exporter refresh intervals are too short for the account limit
+      description: The configured refresh intervals need about {{ $$values.query.Value | humanize }} requests per hour, more than the account limit leaves for the exporter even with the largest budget; they are stretched. Raise the intervals.
     isPaused: false
   - uid: sc-a-p-i-rate-limit-low
     title: ServerscomAPIRateLimitLow

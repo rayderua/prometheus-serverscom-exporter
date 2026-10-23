@@ -80,3 +80,44 @@ func TestBudgetWaitHonoursContext(t *testing.T) {
 		t.Fatal("expected a context error while the budget is used up")
 	}
 }
+
+func TestBudgetAlignEndsWithTheAccountWindow(t *testing.T) {
+	b := newBudget(10, time.Hour)
+	now := time.Now()
+	b.reserve(now)
+	b.align(now.Add(10*time.Minute), now)
+	if s := b.state(now); !s.Reset.Equal(now.Add(10*time.Minute)) || s.Used != 1 {
+		t.Fatalf("state = %+v, want the window to end with the account window", s)
+	}
+}
+
+func TestBudgetStartsOverWithTheAccountWindow(t *testing.T) {
+	b := newBudget(10, time.Hour)
+	now := time.Now()
+	for range 3 {
+		b.reserve(now)
+	}
+	b.align(now.Add(5*time.Minute), now)
+
+	// The account window resets; two loops start requests before the first
+	// response reports the new reset. Both count in the new window.
+	after := now.Add(5*time.Minute + time.Second)
+	b.reserve(after)
+	b.reserve(after)
+	b.align(now.Add(65*time.Minute), after)
+
+	if s := b.state(after); s.Used != 2 || !s.Reset.Equal(now.Add(65*time.Minute)) {
+		t.Fatalf("state = %+v, want 2 used until the new account reset", s)
+	}
+}
+
+func TestBudgetIgnoresPastAndFarResets(t *testing.T) {
+	b := newBudget(10, time.Hour)
+	now := time.Now()
+	b.reserve(now)
+	b.align(now.Add(-time.Minute), now)
+	b.align(now.Add(2*time.Hour), now)
+	if s := b.state(now); !s.Reset.Equal(now.Add(time.Hour)) {
+		t.Fatalf("reset = %v, want unchanged", s.Reset)
+	}
+}

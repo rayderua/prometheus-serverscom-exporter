@@ -27,6 +27,7 @@ that Terraform, the CLI and other users of the account are not starved.
 - [Development](#development)
 - [CI and releases](#ci-and-releases)
 - [Known gaps](#known-gaps)
+- [Changelog](CHANGELOG.md)
 
 ## Repository layout
 
@@ -34,7 +35,8 @@ that Terraform, the CLI and other users of the account are not starved.
 |------|----------|
 | [`src/`](src/README.md) | The exporter (Go), its Dockerfile and the full metric reference |
 | [`charts/serverscom-exporter/`](charts/serverscom-exporter/README.md) | Helm chart: Deployment, cache PVC, ServiceMonitor, PrometheusRule, NetworkPolicy |
-| [`grafana/`](grafana/README.md) | Grafana dashboard (v2 resource with tabs) |
+| [`grafana/`](grafana/README.md) | Grafana dashboard (v2 resource with tabs) and alert rules |
+| [`demo/`](demo/docker-compose.yml) | Docker Compose demo: mock API, exporter, Prometheus, Grafana |
 | [`.github/workflows/`](.github/workflows) | CI and release workflows |
 
 ## How it works
@@ -43,7 +45,7 @@ that Terraform, the CLI and other users of the account are not starved.
 flowchart LR
     API[(Servers.com API<br/>2000 req/h per account)]
     subgraph exporter [serverscom-exporter]
-        L[Refresh loops<br/>hosts · details · features · l2 · reference]
+        L[Refresh loops<br/>hosts · one per collector]
         B{Request budget<br/>and account reserve}
         C[(In-memory cache)]
         F[/cache.json/]
@@ -72,17 +74,53 @@ flowchart LR
 - **Single instance.** Run one exporter per account: every replica spends the
   same account limit.
 
-| Loop | Data | Default interval | Cost per run |
-|------|------|------------------|--------------|
-| hosts | server list: statuses, power, labels, `updated_at` | `2m` | 1 request per 100 servers (page size) |
-| details | drives, ports, networks, features, power feeds, configuration | `12h`, or as soon as a server's `updated_at` changes | 6 requests per server |
-| features | server features only | `1h` (`0` disables) | 1 request per server |
-| l2 | L2 segments, members, networks | `15m` | 1 page + 2 requests per segment |
-| reference | locations, racks, uplink model catalogues | `24h` | a few requests |
+Every collector (API endpoint) has its own interval,
+`--refresh.<collector>-interval`. The defaults refresh what signals a problem
+often and inventory that is only shown in overviews once a day:
 
-The features loop exists because toggling a feature (e.g. port
-disaggregation) does not change `updated_at`, so the details loop would not
-notice it for up to 12 hours.
+| Loop | Data | Default interval | Cost per pass |
+|------|------|------------------|---------------|
+| hosts | server list: statuses, power, labels, scheduled release, `updated_at`; then all collectors of new servers and servers whose `updated_at` changed | `2m` | 1 request per 100 servers (page size) |
+| configuration | server model, RAM, uplinks (`GET /hosts/dedicated_servers/{id}`) | `24h` | 1 request per server |
+| drives | drive slots | `24h` | 1 request per server |
+| ports | switch port connections | `24h` | 1 request per server |
+| networks | IP networks | `24h` | 1 request per server |
+| features | port aggregation (split bonding), OOB public access, rescue mode | `15m` | 1 request per server |
+| power-feeds | power feeds | `15m` | 1 request per server |
+| services | billed services and their prices; the API updates them once a day | `24h` | 1 request per server |
+| uplinks | uplink model catalogues of the server models in use | `24h` | 1 request per model and location |
+| l2-segments | L2 segments, members, networks | `1h` | 1 page + 2 requests per segment |
+| reference | locations, racks | `6h` | 2 requests |
+
+A pass of a per-server collector refreshes every server whose data is older
+than the interval, oldest first and one request after another, then waits
+until the next one is due. Toggling a feature (e.g. splitting the port
+aggregation) does not change `updated_at`, which is why `features` is
+refreshed every 15 minutes.
+
+### Interval stretching
+
+The loops are planned for 80% of the budget; the other 20% is left for new
+and changed servers and retries. When the configured intervals need more,
+every loop but the server list is stretched by the same factor:
+
+```
+stretch = requests per hour of the stretchable loops / (budget × 80% − server list requests per hour)
+```
+
+The loops then run less often but keep their relative frequency, e.g.
+`features` every 20 minutes instead of 15. If the server list alone does not
+fit, it is stretched too. The factor is recomputed when the number of
+servers or segments changes, and the intervals go back to the configured ones
+when the budget allows. When the budget window has 20% or less left anyway,
+the loops pause until the reset; the server list and new servers keep going.
+
+The stretch is logged (`Refresh intervals do not fit into the request budget
+and are stretched`) with the budget that would avoid it, and exposed as
+`serverscom_exporter_refresh_interval_stretch_factor` (1 when everything
+fits), `serverscom_exporter_refresh_interval_seconds` (effective) and
+`serverscom_exporter_refresh_interval_configured_seconds`. Check a
+configuration before deploying it with [`--estimate`](#estimating-a-configuration).
 
 ## Quick start
 
@@ -128,13 +166,31 @@ helm install serverscom-exporter serverscom/serverscom-exporter -n monitoring ..
 
 See [Kubernetes](#kubernetes) and the [chart README](charts/serverscom-exporter/README.md).
 
+### Binary
+
+Each [GitHub release](https://github.com/rayderua/prometheus-serverscom-exporter/releases)
+has static binaries for linux and darwin, amd64 and arm64, with checksums in
+`sha256sums.txt`:
+
+```sh
+v=X.Y.Z
+curl -sSfLO https://github.com/rayderua/prometheus-serverscom-exporter/releases/download/v$v/serverscom-exporter-$v.linux-amd64.tar.gz
+tar -xzf serverscom-exporter-$v.linux-amd64.tar.gz
+SERVERSCOM_API_TOKEN=... ./serverscom-exporter-$v.linux-amd64/serverscom-exporter --cache.file=./cache.json
+```
+
+Binaries of dev builds are artifacts of the *Dev build* workflow runs, see
+[Dev builds](#dev-builds).
+
 ### From source
 
 ```sh
-cd src
-go build ./cmd/serverscom-exporter
-SERVERSCOM_API_TOKEN=... ./serverscom-exporter --cache.file=./cache.json
+make build            # src/bin/serverscom-exporter with version info from git
+SERVERSCOM_API_TOKEN=... src/bin/serverscom-exporter --cache.file=./cache.json
 ```
+
+A plain `go build ./cmd/serverscom-exporter` works too, but `--version` then
+shows no version.
 
 ### Prometheus scrape config
 
@@ -173,22 +229,68 @@ file are given.
 |------|---------|-------------|
 | `--api.url` (`SERVERSCOM_API_URL`) | `https://api.servers.com/v1` | API base URL |
 | `--api.timeout` | `30s` | Timeout of a single request |
-| `--api.page-size` | `100` | `per_page` for collection endpoints |
+| `--api.page-size` | `100` | `per_page` for collection endpoints, 1–100 (the API maximum) |
 | `--api.requests-per-hour` | `1000` | Exporter's own hourly request budget |
 | `--api.ratelimit-reserve` | `300` | Pause when the account-wide remaining requests drop to this value |
-| `--refresh.hosts-interval` | `2m` | Server list (power, statuses, labels) |
-| `--refresh.details-interval` | `12h` | Maximum age of per-server details; changed servers are refreshed earlier |
-| `--refresh.features-interval` | `1h` | Server features for all servers; `0` disables |
-| `--refresh.l2-interval` | `15m` | L2 segments with members and networks |
-| `--refresh.reference-interval` | `24h` | Locations, racks, uplink models |
-| `--cache.file` | empty (off) | File to persist the cache to |
+| `--refresh.hosts-interval` | `2m` | Server list; new and changed servers are downloaded on the same schedule |
+| `--refresh.<collector>-interval` | see [How it works](#how-it-works) | Interval of a collector; stretched when the intervals do not fit into the budget |
+| `--cache.file` | empty (off) | File to persist the cache to; the exporter does not start if it cannot write it |
 | `--cache.save-interval` | `1m` | How often to write the cache file if it changed |
 | `--collector.host-labels` | `*` | Servers.com label keys exposed in `serverscom_host_labels`, comma-separated; `*` for all |
+| `--label=<name>=<value>` | none | Extra label added to every metric; repeatable, see [Extra labels](#extra-labels) |
+| `--[no-]collector.<name>` | on | Optional collectors, see [Collectors](#collectors) |
 | `--web.listen-address` | `:9920` | Listen address; repeatable |
 | `--web.telemetry-path` | `/metrics` | Metrics path |
 | `--web.config.file` | empty | TLS and basic auth, see below |
 | `--log.level` | `info` | `debug`, `info`, `warn`, `error` |
-| `--log.format` | `logfmt` | `logfmt` or `json` |
+| `--log.format` | `json` | `json` or `logfmt`; also the format of `--estimate` |
+| `--estimate` | off | Print the intervals and the request estimate, then exit, see [Estimating a configuration](#estimating-a-configuration) |
+| `--estimate.hosts`, `--estimate.l2-segments`, `--estimate.uplink-catalogues` | from the API or cache | Inventory sizes for `--estimate` |
+
+### Extra labels
+
+`--label=<name>=<value>` adds a label to every metric of the exporter,
+e.g. the account a token belongs to (the API does not expose account
+details):
+
+```sh
+--label=account=prod --label=env=production
+```
+
+In the Helm chart: `config.extraLabels: {account: prod, env: production}`.
+Names must be valid Prometheus label names, must not start with `__` or
+`label_` (used for [host labels](#host-labels)) and must not clash with the
+exporter's own labels such as `host_id`, `location`, `rack`, `loop` or
+`endpoint`; the exporter refuses to start otherwise. If Prometheus adds a
+target label with the same name, it keeps the exporter's value as
+`exported_<name>` unless `honor_labels` is set.
+
+### Collectors
+
+Optional data can be turned off with `--no-collector.<name>`. A disabled
+collector is neither fetched from the API nor exposed, which saves requests;
+its data is dropped from the cache file on start.
+
+| Collector | Metrics | API requests |
+|-----------|---------|--------------|
+| `drives` | `serverscom_host_drive_slot_info`, `_drive_capacity` | one per server and details refresh |
+| `ports` | `serverscom_host_connection_info`, `_connections` | one per server and details refresh |
+| `networks` | `serverscom_host_network_info` | one per server and details refresh |
+| `features` | `serverscom_host_feature_status`, `_feature_enabled`; also the features loop | one per server and details refresh, plus the features loop |
+| `power-feeds` | `serverscom_host_power_feed_status`, `_power_feed_up` | one per server and details refresh |
+| `services` | `serverscom_host_service_price`, `_service_subtotal`, `_service_tax` | one per server and details refresh |
+| `uplinks` | `serverscom_host_uplink_info`, `_uplink_redundant`, `_uplink_aggregated` | one per server model and location, daily |
+| `l2-segments` | `serverscom_l2_segment_*` | the L2 loop |
+
+`serverscom_host_uplink_aggregated` also needs `features`; without it the
+metric is not exposed. When a collector is turned on again, servers whose
+cached details lack it are refreshed on the next check.
+
+```sh
+--no-collector.drives --no-collector.features --no-collector.l2-segments
+```
+
+In the Helm chart: `config.collectors.<name>: false`.
 
 ### HTTP endpoints
 
@@ -229,68 +331,86 @@ The Servers.com API allows **2000 requests per hour per account**, shared by
 everything that uses the account. The exporter applies two limits:
 
 1. **Its own budget**, `--api.requests-per-hour` (default 1000). The window
-   opens with the first request and resets an hour later, like the API's.
-   When it is used up, the exporter logs a warning, sets
-   `serverscom_api_budget_exhausted` and waits for the reset.
+   follows the account window: it ends at `X-RateLimit-Reset` and starts over
+   when the account window resets. Before the API has reported a reset it
+   opens with the first request and lasts an hour. When the budget is used
+   up, the exporter logs a warning, sets `serverscom_api_budget_exhausted`
+   and waits for the reset.
 2. **The account reserve.** When `X-RateLimit-Remaining` drops to
    `--api.ratelimit-reserve` (default 300), the exporter waits until the
-   account window resets. A `429` response pauses it as well.
+   account window resets (`serverscom_api_ratelimit_paused` is 1). A `429`
+   response pauses it as well. The last rate limit state and the requests
+   spent in the current budget window are kept in the cache file, so a
+   restart neither sends a request into a used-up window nor gets a fresh
+   budget in the same window.
 
 Interrupted loops resume where they stopped; cached data is kept meanwhile.
 
 ### Demand estimate
 
-From the number of servers, segments and racks the exporter estimates how
-many requests per hour the configured intervals need and how many a full
-download costs (a start without a cache file). It exposes the estimate as
-metrics and logs a recommendation whenever it changes:
+From the number of servers, segments and racks the exporter computes how many
+requests per hour each loop needs, how far the intervals have to be stretched
+(see [Interval stretching](#interval-stretching)) and how many requests a
+full download costs (a start without a cache file). It exposes the estimate
+as metrics and logs it whenever it changes:
 
 ```
-level=WARN msg="API demand does not fit into the request budget; the exporter will wait for budget resets"
-  requests_per_hour=538 full_refresh_requests=243 budget_per_hour=500 ... recommended="--api.requests-per-hour=700"
+level=WARN msg="Refresh intervals do not fit into the request budget and are stretched; raise the budget to keep them"
+  stretch=1.1 requests_per_hour=800 configured_requests_per_hour=873 budget_per_hour=1000 ... recommended="--api.requests-per-hour=1100"
 ```
 
-The recommended budget is the steady-state demand plus 25% headroom, at least
-one full download, and at most the account limit minus the reserve. If even
-that does not fit, the recommended intervals are raised proportionally.
+The recommended budget fits the configured intervals into 80% of it, covers
+one full download, and is at most the account limit minus the reserve.
+
+### Estimating a configuration
+
+`--estimate` prints the intervals and the request estimate for the other
+flags, then exits:
+
+```sh
+# sizes from the API: the server list and the L2 segment list, a few requests
+SERVERSCOM_API_TOKEN=... serverscom-exporter --estimate --api.requests-per-hour=800
+# sizes from a cache file, or given by hand; no requests, no token
+serverscom-exporter --estimate --cache.file=./cache.json --refresh.features-interval=30m
+serverscom-exporter --estimate --estimate.hosts=300 --estimate.l2-segments=10
+```
+
+The output follows `--log.format`: a JSON document by default, a table with
+`--log.format=logfmt`. Without `configuration_details` in the server list,
+uplink catalogues are counted by configuration name, which may overestimate
+them slightly.
 
 ### Example
 
-100 servers, 10 L2 segments, default intervals:
+100 servers, 10 L2 segments, budget 1000, default intervals:
 
-| Loop | Requests per run | Requests per hour |
-|------|------------------|-------------------|
-| hosts | 1 | 30 |
-| details | 600 | 50 |
-| features | 100 | 100 |
-| l2 | 21 | 84 |
-| reference | ~5 | ~0 |
-| **Total** | full download ≈ 630 | ≈ 265 |
+| Loop | Interval | Requests per pass | Requests per hour |
+|------|----------|-------------------|-------------------|
+| hosts | `2m` | 1 | 30 |
+| features, power-feeds | `15m` | 2 × 100 | 800 |
+| configuration, drives, ports, networks, services | `24h` | 5 × 100 | 21 |
+| l2-segments, uplinks, reference | `1h`, `24h`, `6h` | ~25 | ~22 |
+| **Total** | | full download ≈ 730 | ≈ 873 |
 
-Both fit into the default budget of 1000: a start without a cache downloads
-everything within the first hour, then the exporter uses about a quarter of
-its budget. With the default reserve of 300, the exporter's budget leaves at
-least 700 requests per hour to other users of the account.
-
-At about 160 servers a full download no longer fits into 1000 requests; the
-exporter then recommends a larger `--api.requests-per-hour` (up to 1700, the
-account limit minus the reserve) or longer intervals. With a persisted cache
-a full download happens only once.
+80% of the budget is 800 requests per hour; the server list takes 30, the
+other loops would need 843 and get 770, so they are stretched by 1.1:
+`features` and `power-feeds` run every `17m`. With 200 servers the factor is
+about 2.2, every `33m`, and the exporter recommends a budget of 1700.
 
 Ways to lower the demand, by impact:
 
-- raise `--refresh.features-interval` or set it to `0` if you do not need
-  feature changes faster than `--refresh.details-interval`;
-- raise `--refresh.l2-interval` if you have many segments;
-- raise `--refresh.details-interval`: changed servers are still refreshed
-  right away;
+- raise `--refresh.features-interval` and `--refresh.power-feeds-interval`:
+  at `15m` they cost 4 requests per server and hour each;
+- turn off collectors you do not use (`--no-collector.<name>`): every
+  per-server collector costs one request per server and pass;
 - keep `--cache.file` so restarts do not download everything again.
 
 Useful queries:
 
 ```promql
-# requests the exporter needs per hour, by loop
+# requests the exporter needs per hour, by loop, and how far the intervals are stretched
 serverscom_exporter_requests_per_hour_estimated
+serverscom_exporter_refresh_interval_stretch_factor
 
 # configured vs recommended budget
 serverscom_api_requests_budget_per_hour
@@ -309,9 +429,11 @@ With `--cache.file=/data/cache.json` the cache is saved every
 `--cache.save-interval` (if it changed) and on shutdown, via a temporary file
 and rename. On start it is loaded and each loop waits until its data is due.
 A missing, unreadable or outdated-format file is ignored and the exporter
-starts empty.
+starts empty. If the file cannot be written (the path is a directory, or the
+directory is missing or not writable), the exporter does not start.
 
-The file holds inventory data (hostnames, IPs, labels) but no token. In the
+The file holds inventory data (hostnames, IPs, labels, prices) and the last
+account rate limit state, but no token. In the
 Docker image `/data` is writable by the `nonroot` user; the Helm chart puts it
 on a PVC.
 
@@ -327,9 +449,10 @@ dashboards filter by location and rack without joins. The full list is in
 | Hardware | `serverscom_host_configuration_info`, `_ram_size`, `_drive_slot_info`, `_drive_capacity` |
 | Network | `serverscom_host_connection_info`, `_connections`, `_network_info`, `_uplink_info`, `_uplink_redundant`, `_uplink_aggregated` |
 | Features and power | `serverscom_host_feature_status`, `_feature_enabled`, `_power_feed_status`, `_power_feed_up` |
+| Prices | `serverscom_host_service_price`, `_service_subtotal`, `_service_tax` |
 | L2 segments | `serverscom_l2_segment_info`, `_member_info`, `_network_info` |
 | Reference | `serverscom_location_info`, `serverscom_rack_info` |
-| Exporter | `serverscom_exporter_last_refresh_success_timestamp_seconds`, `_refresh_errors_total`, `_build_info`, demand estimate |
+| Exporter | `serverscom_exporter_last_refresh_success_timestamp_seconds`, `_refresh_errors_total`, `_build_info`, demand estimate, `_refresh_interval_stretch_factor` |
 | API | `serverscom_api_requests_total`, `_request_duration_seconds`, `_ratelimit_*`, `_budget_*` |
 
 Example queries:
@@ -349,6 +472,9 @@ serverscom_host_feature_enabled{feature="oob_public_access"} == 1
 
 # servers scheduled for release within 7 days
 serverscom_host_scheduled_release_timestamp_seconds - time() < 7 * 86400
+
+# price of each server in the current billing period
+sum by (host_id, title, currency) (serverscom_host_service_price)
 
 # age of cached data, by resource
 time() - serverscom_exporter_last_refresh_success_timestamp_seconds
@@ -379,7 +505,8 @@ config:
   requestsPerHour: 1200
   hostLabels: env,team,role
   refresh:
-    featuresInterval: 2h
+    featuresInterval: 30m
+    drivesInterval: 24h
 serviceMonitor:
   enabled: true
   labels:
@@ -393,14 +520,37 @@ prometheusRule:
 ## Grafana dashboard
 
 [`grafana/dashboards/serverscom.json`](grafana/dashboards/serverscom.json) has
-tabs for Overview (including a rate limit forecast), Servers, Power & OOB,
-Network, Drives and Exporter, with variables for data source, location, rack
-and server.
-
-It is a Grafana **dashboard v2** resource and needs Grafana 13 or newer. v2
-dashboards cannot be provisioned from files or ConfigMaps (the Grafana
-sidecar); import it in the UI, through the API or Git Sync. Details in
+tabs for Overview (problem counters and a "Needs attention" list), Racks (a
+map of racks with their servers colored by state, problems first), Servers,
+Costs, Power & OOB, Network, Drives and Exporter (budget, rate limit forecast,
+interval stretch, refresh loops). Variables filter by location, rack, server,
+a Servers.com label and the extra `--label` labels; "Show: Problems only"
+hides servers in order. Renamed servers do not show up twice; see
 [grafana/README.md](grafana/README.md).
+
+It works with Prometheus and VictoriaMetrics data sources.
+
+It is a Grafana **dashboard v2** resource and needs Grafana 13 or newer.
+Provision it from a file (or a ConfigMap with the Grafana sidecar), or import
+it in the UI, through the API or Git Sync. Details in
+[grafana/README.md](grafana/README.md).
+
+### Demo
+
+`make demo` (Docker Compose) starts the exporter against the mock API with 72
+servers in 8 racks and a fixed set of problems, Prometheus with the alert
+rules and Grafana 13 with the dashboard. No Servers.com account is needed.
+
+| | |
+|---|---|
+| Grafana (no login) | http://localhost:3000/d/serverscom-exporter |
+| Prometheus | http://localhost:9090 |
+| Exporter | http://localhost:9920/metrics |
+
+Ports are bound to localhost and can be changed with `GRAFANA_PORT`,
+`PROMETHEUS_PORT` and `EXPORTER_PORT`. `make demo-down` stops it and removes
+its data. The first data shows up within a minute; costs and drives fill in
+as the exporter downloads per-server data.
 
 ## Alerts
 
@@ -429,11 +579,13 @@ budget and account limit.
 | Exits with `Cannot read API token` | No token, an unreadable token file, or both a token and a token file are set. |
 | `serverscom_api_requests_total{code="401"}` grows, refreshes fail | Invalid or revoked token. |
 | `/metrics` has only exporter and API metrics right after start | The first refresh is still running. Without a cache file a full download can take one or more budget windows; watch `Host details processed` progress in the logs. |
-| `Exporter request budget is used up, waiting for the hourly reset` | Demand exceeds `--api.requests-per-hour`. Follow the `recommended=` flags in the warning or see [sizing](#api-rate-limits-and-sizing). Can happen once on a start without a cache with many servers. |
+| `Exporter request budget is used up, waiting for the hourly reset` | More requests than `--api.requests-per-hour` in one window, usually on a start without a cache with many servers. Follow the `recommended=` budget in the log or see [sizing](#api-rate-limits-and-sizing). |
+| `Refresh intervals do not fit into the request budget and are stretched` | The configured intervals need more than 80% of the budget; loops run less often (`serverscom_exporter_refresh_interval_stretch_factor`). Raise the budget to the `recommended=` value or the intervals; check with `--estimate`. |
+| `Cannot write the cache file` at start | `--cache.file` points to a directory, a missing directory or one not writable by uid 65532. Fix the path or the volume permissions (the chart sets `fsGroup`). |
 | `Account rate limit reserve reached, pausing API requests` | Other API users (Terraform, CLI, another exporter) use most of the account limit. Check for a second exporter replica; lower the exporter's demand or the reserve. |
 | `serverscom_api_requests_total{code="429"}` | The account limit was hit; the exporter pauses until the reset. |
-| Drives or ports change late | Details are refreshed when `updated_at` changes or after `--refresh.details-interval`. If the API does not bump `updated_at` for such changes, lower the interval. |
-| Port aggregation / OOB access changes late | Feature changes do not bump `updated_at`; they are picked up by the features loop (`--refresh.features-interval`). |
+| Drives or ports change late | Servers are downloaded again when `updated_at` changes, otherwise on their collector's interval (`24h` by default). Check `serverscom_exporter_refresh_interval_seconds`; lower `--refresh.<collector>-interval` if you need them sooner. |
+| Port aggregation / OOB access changes late | Feature changes do not bump `updated_at`; they are picked up on the features interval, `15m` by default, longer if stretched (see `serverscom_exporter_refresh_interval_seconds{loop="features"}`). |
 | `Cannot save cache` | The cache directory is not writable by uid 65532. Fix the volume permissions (the chart sets `fsGroup`). |
 | Kubernetes probes fail with basic auth | Basic auth also covers `/-/healthy`; set `probes.type: tcpSocket` in the chart. |
 
@@ -454,6 +606,8 @@ release), Docker with buildx, Helm 3.8+ or 4, and for some checks
 | Known vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | `src/` |
 | Image smoke test | `test/smoke.sh <image>` | `src/` |
 | Binary smoke test | `EXPORTER_BIN=./serverscom-exporter test/smoke.sh` | `src/` |
+| Upgrade test | `PREVIOUS=<previous image or binary>` with either of the above | `src/` |
+| Update the golden series list | `UPDATE_GOLDEN=1` with either of the above | `src/` |
 | Chart lint | `helm lint --strict charts/serverscom-exporter --set apiToken.value=test` | repo root |
 | Chart unit tests | `helm unittest charts/serverscom-exporter` | repo root |
 | Alert rule tests | `promtool test rules grafana/alerts/tests/*.test.yml` | repo root |
@@ -461,14 +615,43 @@ release), Docker with buildx, Helm 3.8+ or 4, and for some checks
 The **smoke test** starts [`src/test/mockapi`](src/test/mockapi/main.go), a
 fake Servers.com API with two servers and one L2 segment, runs the exporter
 image (or a local binary) against it with `--api.page-size=1` to exercise
-pagination, and checks `/-/healthy` and the main metrics. Then it stops the
-API, restarts the exporter and checks that the same data is served from the
-cache file. The mock is handy for local development as well:
+pagination, and checks:
+
+1. `/-/healthy`, the main metrics and the absence of API and refresh errors;
+2. **regressions in the exposed series**: every metric name with its labels
+   (values dropped, see [`test/metrics-shape.sh`](src/test/metrics-shape.sh))
+   must match [`test/golden/metrics-shape.txt`](src/test/golden/metrics-shape.txt).
+   An intended change of metrics or labels updates the file with
+   `UPDATE_GOLDEN=1`, and the diff shows up in review;
+3. after a restart with the API down, the same data is served from the cache
+   file;
+4. with `--no-collector.drives`, `features` and `l2-segments` and a fixed
+   `--refresh.ports-interval`, their metrics and refresh timestamps are gone,
+   `uplink_aggregated` is not exposed, the rest is served.
+
+With `PREVIOUS` it first runs the previous release, which fills the cache
+file, and then requires the new version to serve exactly the same inventory
+(server, L2 and reference series with values) after the upgrade. CI passes
+the image of the last stable `v*` tag.
+
+The mock is handy for local development as well:
 
 ```sh
 cd src
 go run ./test/mockapi --listen=:8080 --token=test &
 go run ./cmd/serverscom-exporter --api.url=http://localhost:8080/v1 --api.token=test
+```
+
+Mock flags for larger and more realistic inventories:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--servers`, `--racks` | `2`, `1` | Servers spread over racks |
+| `--rack-growth=K` | `0` (off) | Rack N holds K×N servers, with several models, labels, prices and a fixed pattern of problems (powered off, power feed down, split bonding, public OOB access, missing drives, no prices yet); `--servers` is ignored |
+| `--ratelimit`, `--ratelimit-window` | `2000`, `1h` | Requests per window; the window starts at a multiple of its length, requests over the limit get `429` |
+
+```sh
+go run ./test/mockapi --racks=18 --rack-growth=2   # 342 servers, 2..36 per rack
 ```
 
 Chart unit tests live in
@@ -478,12 +661,25 @@ not packaged. With Helm 4, install the plugin with
 
 ### Build
 
+From the repository root, see the [`Makefile`](Makefile); outputs are
+git-ignored:
+
 ```sh
-docker build -t prometheus-serverscom-exporter \
-  --build-arg VERSION=$(git describe --tags --match 'v*' --always) \
-  --build-arg REVISION=$(git rev-parse HEAD) \
-  src/
+make build    # binary for the host platform -> src/bin/serverscom-exporter
+make dist     # release archives for linux and darwin, amd64 and arm64 -> src/dist/
+make image    # Docker image prometheus-serverscom-exporter:<version>
+make chart    # packaged chart -> dist/
+make clean
 ```
+
+Version info comes from git (`git describe` of the last `v*` tag, commit,
+branch, commit time) and can be set with `VERSION`, `REVISION`, `BRANCH` and
+`BUILD_DATE`, e.g. `make image VERSION=0.2.0`. `PLATFORMS` limits `make dist`
+(`make dist PLATFORMS=linux/amd64`), `IMAGE` names the image, `CHART_VERSION`
+and `APP_VERSION` override the chart versions. Archives are
+`src/dist/serverscom-exporter-<version>.<os>-<arch>.tar.gz` with the binary and
+this README, plus `src/dist/sha256sums.txt`; the same commit and version give
+the same bytes. Archives need GNU tar.
 
 Code layout under `src/internal/`:
 
@@ -504,6 +700,8 @@ GitHub Actions ([`.github/workflows`](.github/workflows)):
   - *Go tests*: `go test -race` with a per-package coverage table in the job
     summary and `coverage.out` as an artifact;
   - *Go lint*: `gofmt`, `go vet`, golangci-lint, govulncheck;
+  - *Binaries*: `make dist`, then the smoke test of the linux/amd64
+    binary from its archive;
   - *Docker image*: linux/amd64 and linux/arm64 build without push, then the
     smoke test of the amd64 image against the mock API;
   - *Helm chart*: version bump check, `helm lint`, helm-unittest, kubeconform,
@@ -513,16 +711,19 @@ GitHub Actions ([`.github/workflows`](.github/workflows)):
 
   Go jobs use the latest Go 1.27 patch release, so govulncheck does not
   report standard library issues fixed since the version in `go.mod`.
+- **Dev builds** of the image and the chart from `development`, see
+  [Dev builds](#dev-builds).
 - **Releases** are made from tags on commits of `main`; tags elsewhere fail.
   The exporter image and the chart are versioned independently.
 
 | Tag | Releases | Version |
 |-----|----------|---------|
-| `vX.Y.Z`, `vX.Y.Z-rc.N` | image `ghcr.io/rayderua/prometheus-serverscom-exporter` (`X.Y.Z`, `X.Y`, `latest`; pre-releases only their own tag), linux/amd64 and linux/arm64 | from the tag |
+| `vX.Y.Z`, `vX.Y.Z-rc.N` | image `ghcr.io/rayderua/prometheus-serverscom-exporter` (`X.Y.Z`, `X.Y`, `latest`; pre-releases only their own tag), linux/amd64 and linux/arm64; binaries for linux and darwin, amd64 and arm64, attached to the GitHub release | from the tag |
 | `chart-X.Y.Z` | chart `oci://ghcr.io/rayderua/charts/serverscom-exporter` and the Helm repository `https://rayderua.github.io/prometheus-serverscom-exporter` | `version` in `Chart.yaml`, must match the tag |
 
 Each tag also creates a GitHub release; only image releases are marked
-"Latest". An image is pushed only after it passes the smoke test. For the
+"Latest". An image is pushed and binaries are attached only after they pass
+the smoke test. For the
 Helm repository, the release workflow adds the chart to `index.yaml` on the
 `gh-pages` branch; the entry points to the `.tgz` attached to the GitHub
 release. GitHub Pages must be enabled for the `gh-pages` branch.
@@ -538,6 +739,35 @@ git tag chart-0.3.1 && git push origin chart-0.3.1
 Chart-only changes need just the `version` bump and a `chart-*` tag. The chart
 release fails if the image of its `appVersion` is not published yet.
 
+### Dev builds
+
+Every push to `development` that passes CI publishes a dev build (workflow
+*Dev build*, can also be started by hand on `development`):
+
+| What | Where | Version |
+|------|-------|---------|
+| Image, linux/amd64 and linux/arm64 | `ghcr.io/rayderua/prometheus-serverscom-exporter` | `X.Y.Z-dev.N`, `dev` (latest dev build), `sha-<commit>` |
+| Chart, OCI only | `oci://ghcr.io/rayderua/charts/serverscom-exporter` | `X.Y.Z-dev.N`, `appVersion` `X.Y.Z-dev.N` |
+| Binaries, linux and darwin, amd64 and arm64 | artifact `serverscom-exporter-X.Y.Z-dev.N` of the workflow run, kept 30 days | `X.Y.Z-dev.N` |
+
+`X.Y.Z` comes from `version` and `appVersion` in `Chart.yaml`, `N` is the
+run number; the job summary shows the exact versions. Dev versions are SemVer
+pre-releases: `helm install` without `--version` or `--devel` keeps installing
+the latest release, and dev builds never reach the Helm repository on
+gh-pages, GitHub releases or the `latest` image tag.
+
+```sh
+# latest dev build
+helm upgrade --install serverscom-exporter \
+  oci://ghcr.io/rayderua/charts/serverscom-exporter --devel -f values.yaml
+# a specific one
+helm upgrade --install serverscom-exporter \
+  oci://ghcr.io/rayderua/charts/serverscom-exporter --version 0.2.0-dev.17 -f values.yaml
+```
+
+Dev builds accumulate in ghcr; delete old versions in the package settings
+when needed.
+
 ## Known gaps
 
 Some API details are not yet verified against the live API (full list in
@@ -546,5 +776,4 @@ Some API details are not yet verified against the live API (full list in
 - the full set of feature `status` values (`feature_enabled` and
   `uplink_aggregated` assume `activated`);
 - units of `ram_size` and drive `capacity` (most likely GB);
-- whether `updated_at` changes when drives or ports change;
-- the maximum `per_page` value.
+- whether `updated_at` changes when drives or ports change.

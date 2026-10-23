@@ -1,0 +1,136 @@
+name: Dev build
+
+# Dev image and chart from the development branch, for testing before a
+# release. Runs after CI passed on a push to development (or by hand on
+# development) and publishes:
+#   - image ghcr.io/<owner>/prometheus-serverscom-exporter:X.Y.Z-dev.N, :dev
+#     (the latest dev build) and :sha-<commit>;
+#   - chart oci://ghcr.io/<owner>/charts/serverscom-exporter version
+#     X.Y.Z-dev.N with appVersion X.Y.Z-dev.N;
+#   - binaries X.Y.Z-dev.N (make dist) as a workflow artifact, kept
+#     30 days.
+# X.Y.Z is the version in Chart.yaml and appVersion respectively, N the run
+# number of this workflow. Dev versions are SemVer pre-releases, so Helm only
+# picks them with --devel or an explicit --version. Nothing goes to the Helm
+# repository on gh-pages or to GitHub releases.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [development]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-build
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository_owner }}/prometheus-serverscom-exporter
+  CHART_DIR: charts/serverscom-exporter
+  CHART_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
+  HELM_VERSION: v4.2.0
+  GO_VERSION: "1.27"
+
+jobs:
+  publish:
+    name: Dev image and chart
+    # Only green pushes to development, not pull requests (they also run CI
+    # on development as the base branch).
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref_name == 'development') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.SHA }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Versions
+        run: |
+          read_field() { sed -n "s/^$1:[[:space:]]*//p" "$CHART_DIR/Chart.yaml" | tr -d "\"'"; }
+          suffix="dev.${GITHUB_RUN_NUMBER}"
+          echo "CHART_VERSION=$(read_field version)-$suffix" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$(read_field appVersion)-$suffix" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${SHA::7}" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u -d "@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: src
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.APP_VERSION }}
+            ${{ env.IMAGE }}:dev
+            ${{ env.IMAGE }}:sha-${{ env.SHORT_SHA }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+            org.opencontainers.image.version=${{ env.APP_VERSION }}
+          build-args: |
+            VERSION=${{ env.APP_VERSION }}
+            REVISION=${{ env.SHA }}
+            BRANCH=development
+            BUILD_DATE=${{ env.BUILD_DATE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache-dependency-path: src/go.sum
+
+      - name: Build binaries
+        working-directory: src
+        run: make -C .. dist VERSION="$APP_VERSION" REVISION="$SHA" BRANCH=development
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverscom-exporter-${{ env.APP_VERSION }}
+          path: src/dist/
+          retention-days: 30
+
+      - name: Package and push the chart
+        run: |
+          helm lint --strict "$CHART_DIR" --set apiToken.value=ci
+          helm package "$CHART_DIR" --destination dist --version "$CHART_VERSION" --app-version "$APP_VERSION"
+          echo "$GH_TOKEN" | helm registry login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+          helm push "dist/serverscom-exporter-${CHART_VERSION}.tgz" "$CHART_REPO"
+
+      - name: Summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ### Dev build ${CHART_VERSION}
+
+          Commit \`${SHORT_SHA}\` of development.
+
+          | | |
+          |---|---|
+          | Image | \`${IMAGE}:${APP_VERSION}\` (also \`:dev\`, \`:sha-${SHORT_SHA}\`) |
+          | Chart | \`helm upgrade --install serverscom-exporter ${CHART_REPO}/serverscom-exporter --version ${CHART_VERSION}\` |
+          | Binaries | artifact \`serverscom-exporter-${APP_VERSION}\` of this run |
+          EOF

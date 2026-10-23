@@ -124,13 +124,24 @@ tests:
         alertname: ServerscomHostRemoved
         exp_alerts: []
 
-  # One of two drives disappeared compared to a day ago.
+  # One of two drives disappeared compared to a day ago (h1). h2 keeps its
+  # drives but is renamed and moved to another rack at 12h: no alert.
   - interval: 1h
     input_series:
+      - series: 'serverscom_host_info{host_id="h1",title="node-1",location="ams1",rack="R1"}'
+        values: '1x30'
       - series: 'serverscom_host_drive_capacity{host_id="h1",title="node-1",location="ams1",rack="R1",position="0"}'
         values: '960x30'
       - series: 'serverscom_host_drive_capacity{host_id="h1",title="node-1",location="ams1",rack="R1",position="1"}'
         values: '960x23 _x7'
+      - series: 'serverscom_host_info{host_id="h2",title="node-2",location="ams1",rack="R1"}'
+        values: '1x11 stale'
+      - series: 'serverscom_host_info{host_id="h2",title="db-2",location="ams1",rack="R2"}'
+        values: '_x12 1x18'
+      - series: 'serverscom_host_drive_capacity{host_id="h2",title="node-2",location="ams1",rack="R1",position="0"}'
+        values: '960x11 stale'
+      - series: 'serverscom_host_drive_capacity{host_id="h2",title="db-2",location="ams1",rack="R2",position="0"}'
+        values: '_x12 960x18'
     alert_rule_test:
       - eval_time: 10h
         alertname: ServerscomHostDrivesMissing
@@ -165,11 +176,11 @@ tests:
         values: '1x30'
       - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="hosts"}'
         values: '0x30'
-      - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="host_features"}'
+      - series: 'serverscom_exporter_last_refresh_success_timestamp_seconds{job="sc",instance="x",resource="features"}'
         values: '0+60x30'
       - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="hosts"}'
         values: '120x30'
-      - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="host_features"}'
+      - series: 'serverscom_exporter_refresh_interval_seconds{job="sc",instance="x",loop="features"}'
         values: '300x30'
       - series: 'serverscom_api_budget_exhausted{job="sc",instance="x"}'
         values: '1x30'
@@ -193,13 +204,11 @@ tests:
                 The exporter used up --api.requests-per-hour and waits for the hourly reset; data gets stale
                 meanwhile. Compare serverscom_api_requests_per_hour_recommended with the budget.
 
-  # Demand above the budget, account close to its limit, rejected token.
+  # Intervals stretched, account close to its limit, rejected token.
   - interval: 1m
     input_series:
-      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="host_features"}'
-        values: '468x40'
-      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="hosts"}'
-        values: '30x40'
+      - series: 'serverscom_exporter_refresh_interval_stretch_factor{job="sc",instance="x"}'
+        values: '1.25x40'
       - series: 'serverscom_api_requests_budget_per_hour{job="sc",instance="x"}'
         values: '400x40'
       - series: 'serverscom_api_ratelimit_remaining{job="sc",instance="x"}'
@@ -216,10 +225,11 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, job: sc, instance: x}
             exp_annotations:
-              summary: Servers.com exporter configuration needs more requests than its budget
+              summary: Servers.com exporter refresh intervals are stretched to fit its budget
               description: >-
-                The configured refresh intervals need about 498 requests per hour, more than
-                --api.requests-per-hour. The exporter log recommends the flags to change.
+                The configured refresh intervals need more than 80% of --api.requests-per-hour, so the exporter
+                runs them 1.25 times less often. Raise the budget to serverscom_api_requests_per_hour_recommended
+                or the intervals.
       - eval_time: 6m
         alertname: ServerscomAPIRateLimitLow
         exp_alerts:

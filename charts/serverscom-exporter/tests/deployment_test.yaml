@@ -32,7 +32,7 @@ tests:
         requestsPerHour: 1200
         ratelimitReserve: 0
         refresh:
-          featuresInterval: "0"
+          featuresInterval: 5m
           hostsInterval: 5m
         hostLabels: env,team
         logFormat: json
@@ -45,7 +45,7 @@ tests:
           content: --api.ratelimit-reserve=0
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --refresh.features-interval=0
+          content: --refresh.features-interval=5m
       - contains:
           path: spec.template.spec.containers[0].args
           content: --refresh.hosts-interval=5m
@@ -57,7 +57,7 @@ tests:
           content: --log.format=json
       - notContains:
           path: spec.template.spec.containers[0].args
-          content: --refresh.l2-interval=
+          content: --refresh.l2-segments-interval=
       - lengthEqual:
           path: spec.template.spec.containers[0].args
           count: 10
@@ -230,3 +230,17 @@ tests:
             readOnly: true
       - exists:
           path: spec.template.metadata.annotations["checksum/web-config"]
+
+  - it: passes extra labels sorted by name
+    set:
+      config:
+        extraLabels:
+          env: dev
+          account: prod
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --label=account=prod
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --label=env=dev
