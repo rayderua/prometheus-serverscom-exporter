@@ -3,7 +3,7 @@
 The exporter image (`vX.Y.Z` tags) and the Helm chart (`chart-X.Y.Z` tags)
 are versioned independently; see [CI and releases](README.md#ci-and-releases).
 
-## 0.2.0 (unreleased): image v0.2.0, chart 0.2.0
+## 0.2.0 (2026-10-23): image v0.2.0, chart 0.2.0
 
 ### Breaking changes
 
