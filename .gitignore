@@ -9,6 +9,8 @@ out/
 # Exporter binary built from src/
 /src/serverscom-exporter
 /src/bin/
+/src/dist/
+/dist/
 *.test
 *.out
 coverage.*
@@ -34,3 +36,6 @@ charts/*/charts/
 Thumbs.db
 *.swp
 *~
+
+# --- Other ---
+.tmp

@@ -85,6 +85,30 @@ jobs:
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
 
+  binaries:
+    name: Binaries
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # tags for the version in the binary
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache-dependency-path: src/go.sum
+      - name: Build all platforms
+        run: make -C .. dist
+      - name: Smoke test of the linux/amd64 binary
+        run: |
+          tar -xzf dist/serverscom-exporter-*.linux-amd64.tar.gz -C "$RUNNER_TEMP"
+          bin=$(echo "$RUNNER_TEMP"/serverscom-exporter-*.linux-amd64/serverscom-exporter)
+          "$bin" --version
+          EXPORTER_BIN="$bin" test/smoke.sh
+
   image:
     name: Docker image
     runs-on: ubuntu-latest

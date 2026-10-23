@@ -6,7 +6,9 @@ name: Dev build
 #   - image ghcr.io/<owner>/prometheus-serverscom-exporter:X.Y.Z-dev.N, :dev
 #     (the latest dev build) and :sha-<commit>;
 #   - chart oci://ghcr.io/<owner>/charts/serverscom-exporter version
-#     X.Y.Z-dev.N with appVersion X.Y.Z-dev.N.
+#     X.Y.Z-dev.N with appVersion X.Y.Z-dev.N;
+#   - binaries X.Y.Z-dev.N (make dist) as a workflow artifact, kept
+#     30 days.
 # X.Y.Z is the version in Chart.yaml and appVersion respectively, N the run
 # number of this workflow. Dev versions are SemVer pre-releases, so Helm only
 # picks them with --devel or an explicit --version. Nothing goes to the Helm
@@ -31,6 +33,7 @@ env:
   CHART_DIR: charts/serverscom-exporter
   CHART_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
   HELM_VERSION: v4.2.0
+  GO_VERSION: "1.27"
 
 jobs:
   publish:
@@ -95,6 +98,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache-dependency-path: src/go.sum
+
+      - name: Build binaries
+        working-directory: src
+        run: make -C .. dist VERSION="$APP_VERSION" REVISION="$SHA" BRANCH=development
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverscom-exporter-${{ env.APP_VERSION }}
+          path: src/dist/
+          retention-days: 30
+
       - name: Package and push the chart
         run: |
           helm lint --strict "$CHART_DIR" --set apiToken.value=ci
@@ -113,4 +132,5 @@ jobs:
           |---|---|
           | Image | \`${IMAGE}:${APP_VERSION}\` (also \`:dev\`, \`:sha-${SHORT_SHA}\`) |
           | Chart | \`helm upgrade --install serverscom-exporter ${CHART_REPO}/serverscom-exporter --version ${CHART_VERSION}\` |
+          | Binaries | artifact \`serverscom-exporter-${APP_VERSION}\` of this run |
           EOF
