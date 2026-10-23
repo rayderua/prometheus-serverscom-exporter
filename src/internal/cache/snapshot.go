@@ -78,6 +78,7 @@ type HostDetails struct {
 	Networks      []api.Network             `json:"networks"`
 	Features      []api.Feature             `json:"features"`
 	PowerFeeds    []api.PowerFeed           `json:"power_feeds"`
+	Services      []api.Service             `json:"services"`
 }
 
 // Segment is an L2 segment with its members and networks.

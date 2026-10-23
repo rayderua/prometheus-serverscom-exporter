@@ -3,7 +3,6 @@ package refresher
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -81,6 +80,11 @@ func (f *fakeAPI) ListFeatures(context.Context, string) ([]api.Feature, error) {
 	return f.features, nil
 }
 
+func (f *fakeAPI) ListServices(context.Context, string) ([]api.Service, error) {
+	f.count("ListServices")
+	return nil, nil
+}
+
 func (f *fakeAPI) ListPowerFeeds(context.Context, string) ([]api.PowerFeed, error) {
 	f.count("ListPowerFeeds")
 	f.mu.Lock()
@@ -139,18 +143,9 @@ func newTestRefresherConfig(fake *fakeAPI, store *cache.Store, cfg Config) *Refr
 
 func testConfig() Config {
 	return Config{
-		HostsInterval: 2 * time.Minute, AutoMinInterval: 5 * time.Minute, AutoMaxInterval: 24 * time.Hour,
-		PageSize: 100, BudgetPerHour: 400, Reserve: 300,
+		HostsInterval: 2 * time.Minute,
+		PageSize:      100, BudgetPerHour: 400, Reserve: 300,
 	}
-}
-
-// testServers returns n servers h01..hNN.
-func testServers(n int) []api.DedicatedServer {
-	servers := make([]api.DedicatedServer, n)
-	for i := range servers {
-		servers[i] = api.DedicatedServer{ID: fmt.Sprintf("h%02d", i+1), LocationID: 1}
-	}
-	return servers
 }
 
 func TestDetailsAreFetchedOnceAndRefetchedOnChange(t *testing.T) {
@@ -288,29 +283,6 @@ func mustRun(t *testing.T, err error) {
 	}
 }
 
-func TestAutoIntervalFollowsTheDemand(t *testing.T) {
-	cfg := testConfig()
-	cfg.Intervals = map[cache.Collector]Interval{cache.CollectorFeatures: {Fixed: 15 * time.Minute}}
-	r := newTestRefresherConfig(&fakeAPI{servers: testServers(20)}, cache.NewStore("", slog.New(slog.DiscardHandler)), cfg)
-
-	// Before the first estimate auto collectors use the maximum.
-	if got := r.interval(cache.CollectorDrives); got != 24*time.Hour {
-		t.Fatalf("auto interval before the estimate = %v, want 24h", got)
-	}
-
-	mustRun(t, r.refreshHosts(context.Background()))
-
-	// Fixed: hosts 30/h + features 20 every 15m = 80/h. Auto: 5 collectors x 20
-	// servers + L2 page + 2 reference pages = 103 per run, into 400*0.8-110 =
-	// 210/h: 29.4m, rounded up to 30m.
-	if got := r.interval(cache.CollectorDrives); got != 30*time.Minute {
-		t.Errorf("auto interval = %v, want 30m", got)
-	}
-	if got := r.interval(cache.CollectorFeatures); got != 15*time.Minute {
-		t.Errorf("fixed features interval = %v, want 15m", got)
-	}
-}
-
 func TestHostCollectorQueueIsOldestFirst(t *testing.T) {
 	store := cache.NewStore("", slog.New(slog.DiscardHandler))
 	base := time.Now().Add(-time.Hour)
@@ -418,19 +390,19 @@ func TestPartialNewHostIsQueuedFirst(t *testing.T) {
 	}
 }
 
-func TestAutoCollectorsWaitForBudget(t *testing.T) {
-	// Budget 400: auto collectors leave the last 20% (80 requests) to fixed ones.
+func TestLoopsWaitForBudget(t *testing.T) {
+	// Budget 400: the loops leave the last 20% (80 requests) to the server list.
 	fake := &fakeAPI{budgetRemaining: 81}
 	r := newTestRefresher(fake)
-	if !r.waitForAutoBudget(context.Background()) {
-		t.Fatal("auto collectors blocked with budget left")
+	if !r.waitForBudget(context.Background()) {
+		t.Fatal("loops blocked with budget left")
 	}
 
 	fake.budgetRemaining = 80
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if r.waitForAutoBudget(ctx) {
-		t.Fatal("auto collectors did not wait with 20% of the budget left")
+	if r.waitForBudget(ctx) {
+		t.Fatal("loops did not wait with 20% of the budget left")
 	}
 }
 
@@ -472,5 +444,29 @@ func TestPrepareCacheDropsDisabledData(t *testing.T) {
 		if _, ok := s.LastSuccess[resource]; ok != want {
 			t.Errorf("last success of %s kept = %v, want %v", resource, ok, want)
 		}
+	}
+}
+
+func TestLoopsUseTheEffectiveIntervals(t *testing.T) {
+	servers := make([]api.DedicatedServer, 20)
+	for i := range servers {
+		servers[i] = api.DedicatedServer{ID: string(rune('a' + i)), LocationID: 1}
+	}
+	cfg := testConfig()
+	cfg.BudgetPerHour = 200
+	r := newTestRefresherConfig(&fakeAPI{servers: servers}, cache.NewStore("", slog.New(slog.DiscardHandler)), cfg)
+
+	// Before the first estimate the configured intervals apply.
+	if got := r.interval(cache.CollectorFeatures); got != 15*time.Minute {
+		t.Fatalf("features before the estimate = %v, want 15m", got)
+	}
+
+	mustRun(t, r.refreshHosts(context.Background()))
+
+	if got := r.interval(cache.CollectorFeatures); got != 20*time.Minute {
+		t.Errorf("features = %v, want 20m (stretched)", got)
+	}
+	if got := r.hostsInterval(); got != 2*time.Minute {
+		t.Errorf("hosts = %v, want 2m (not stretched)", got)
 	}
 }

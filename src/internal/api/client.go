@@ -73,17 +73,22 @@ type Client struct {
 
 	mu        sync.Mutex
 	rateLimit RateLimit
+	onRate    func(RateLimit) // see OnRateLimit
 
 	// pauseLoggedFor is the reset time of the last logged pause, so a pause is
 	// logged once rather than by every waiting request.
 	pauseLoggedFor time.Time
 }
 
+// DefaultAccountLimit is the documented account-wide limit per hour, used
+// until the API reports X-RateLimit-Limit.
+const DefaultAccountLimit = 2000
+
 // RateLimit is the account-wide rate limit state reported by the API.
 type RateLimit struct {
-	Limit     int
-	Remaining int
-	Reset     time.Time
+	Limit     int       `json:"limit"`
+	Remaining int       `json:"remaining"`
+	Reset     time.Time `json:"reset"`
 }
 
 // NewClient validates options and builds a Client.
@@ -131,6 +136,34 @@ func (c *Client) BudgetPerHour() int {
 // BudgetRemaining returns the requests left in the current budget window.
 func (c *Client) BudgetRemaining() int {
 	return c.budget.state(time.Now()).Remaining
+}
+
+// OnRateLimit sets a function called with the new state whenever a response
+// changes the account rate limit, e.g. to persist it.
+func (c *Client) OnRateLimit(fn func(RateLimit)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onRate = fn
+}
+
+// RestoreRateLimit takes over a rate limit state saved earlier, e.g. in the
+// cache file, if its window has not reset yet. A restarted exporter then
+// honours the reserve before its first request instead of finding out from
+// the response.
+func (c *Client) RestoreRateLimit(rl RateLimit) {
+	now := time.Now()
+	if rl.Limit <= 0 || !now.Before(rl.Reset) {
+		return
+	}
+	c.mu.Lock()
+	c.rateLimit = rl
+	c.mu.Unlock()
+	c.budget.align(rl.Reset, now)
+	c.metrics.rateLimit.Set(float64(rl.Limit))
+	c.metrics.rateRemaining.Set(float64(rl.Remaining))
+	c.metrics.rateReset.Set(float64(rl.Reset.Unix()))
+	c.logger.Info("Restored the account rate limit state", "limit", rl.Limit, "remaining", rl.Remaining,
+		"reset_at", rl.Reset.Format(time.RFC3339), "paused", rl.Remaining <= c.reserve)
 }
 
 // RateLimit returns the last account-wide rate limit state seen in responses.
@@ -285,9 +318,17 @@ func (c *Client) updateRateLimit(h http.Header) {
 		return
 	}
 
+	rl := RateLimit{Limit: limit, Remaining: remaining, Reset: time.Unix(reset, 0)}
 	c.mu.Lock()
-	c.rateLimit = RateLimit{Limit: limit, Remaining: remaining, Reset: time.Unix(reset, 0)}
+	c.rateLimit = rl
+	onRate := c.onRate
 	c.mu.Unlock()
+	if onRate != nil {
+		onRate(rl)
+	}
+
+	// The exporter's budget window follows the account window.
+	c.budget.align(time.Unix(reset, 0), time.Now())
 
 	c.metrics.rateLimit.Set(float64(limit))
 	c.metrics.rateRemaining.Set(float64(remaining))
@@ -298,13 +339,19 @@ func (c *Client) updateRateLimit(h http.Header) {
 // even if the 429 response carried no rate limit headers.
 func (c *Client) pauseAfterRateLimited() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.rateLimit.Remaining = 0
 	if c.rateLimit.Limit == 0 {
-		c.rateLimit.Limit = 1
+		// No header seen yet: assume the documented limit, so the request
+		// estimate stays sensible while the exporter waits.
+		c.rateLimit.Limit = DefaultAccountLimit
 	}
 	if !time.Now().Before(c.rateLimit.Reset) {
 		c.rateLimit.Reset = time.Now().Add(time.Minute)
+	}
+	rl, onRate := c.rateLimit, c.onRate
+	c.mu.Unlock()
+	if onRate != nil {
+		onRate(rl)
 	}
 }
 
@@ -372,6 +419,16 @@ func (c *Client) registerBudgetMetrics(reg prometheus.Registerer) {
 		}, func() float64 {
 			if reset := state().Reset; !reset.IsZero() {
 				return float64(reset.Unix())
+			}
+			return 0
+		}),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "serverscom_api_ratelimit_paused",
+			Help: "1 while the exporter pauses because the account-wide X-RateLimit-Remaining dropped to --api.ratelimit-reserve; it resumes at the window reset.",
+		}, func() float64 {
+			rl := c.RateLimit()
+			if rl.Limit > 0 && rl.Remaining <= c.reserve && time.Now().Before(rl.Reset) {
+				return 1
 			}
 			return 0
 		}),

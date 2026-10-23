@@ -101,6 +101,24 @@ type PowerFeed struct {
 	Type   string `json:"type"`
 }
 
+// Service is a billed service of a server in the current billing period,
+// e.g. the server hardware, bandwidth or an additional IP network. Amounts
+// are in Currency; Total includes Tax.
+type Service struct {
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	Type          string  `json:"type"`
+	Label         string  `json:"label"`
+	Currency      string  `json:"currency"`
+	DateFrom      string  `json:"date_from"`
+	DateTo        string  `json:"date_to"`
+	UsageQuantity float64 `json:"usage_quantity"`
+	Tax           float64 `json:"tax"`
+	Total         float64 `json:"total"`
+	Subtotal      float64 `json:"subtotal"`
+	DiscountRate  float64 `json:"discount_rate"`
+}
+
 // L2Segment is a private or public L2 segment spanning one location group.
 type L2Segment struct {
 	ID                string            `json:"id"`

@@ -1,41 +1,32 @@
 package refresher
 
 import (
-	"errors"
 	"time"
+
+	"github.com/rayderua/prometheus-serverscom-exporter/src/internal/cache"
 )
 
-// Interval is a refresh interval: a fixed duration, or auto, which shares
-// the request budget left after the fixed intervals among auto collectors.
-// It implements kingpin.Value.
-type Interval struct {
-	Auto  bool
-	Fixed time.Duration
+// defaultIntervals are the refresh intervals without flags: often for what
+// signals a problem (split bonding, public OOB access, a power feed down),
+// rarely for inventory that is only shown in overviews. Changed servers are
+// downloaded right away anyway (see refreshDetails).
+var defaultIntervals = map[cache.Collector]time.Duration{
+	cache.CollectorConfiguration: 24 * time.Hour,
+	cache.CollectorDrives:        24 * time.Hour,
+	cache.CollectorPorts:         24 * time.Hour,
+	cache.CollectorNetworks:      24 * time.Hour,
+	cache.CollectorFeatures:      15 * time.Minute,
+	cache.CollectorPowerFeeds:    15 * time.Minute,
+	cache.CollectorServices:      24 * time.Hour, // the API updates prices once a day
+	cache.CollectorUplinks:       24 * time.Hour,
+	cache.CollectorL2Segments:    time.Hour,
+	cache.CollectorReference:     6 * time.Hour,
 }
 
-// AutoInterval is the auto interval.
-var AutoInterval = Interval{Auto: true}
-
-// Set parses "auto" or a positive duration.
-func (i *Interval) Set(s string) error {
-	if s == "auto" {
-		*i = AutoInterval
-		return nil
+// DefaultInterval returns the default refresh interval of collector c.
+func DefaultInterval(c cache.Collector) time.Duration {
+	if d, ok := defaultIntervals[c]; ok {
+		return d
 	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return errors.New(`want "auto" or a duration, e.g. 15m`)
-	}
-	if d <= 0 {
-		return errors.New("must be positive; disable a collector with --no-collector.<name>")
-	}
-	*i = Interval{Fixed: d}
-	return nil
-}
-
-func (i Interval) String() string {
-	if i.Auto {
-		return "auto"
-	}
-	return formatDuration(i.Fixed)
+	return 24 * time.Hour
 }

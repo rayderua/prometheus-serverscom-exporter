@@ -70,3 +70,57 @@ func TestSaveSkipsUnchangedSnapshot(t *testing.T) {
 		t.Fatalf("cache file written without changes: %v", err)
 	}
 }
+
+func TestRateLimitIsSavedWithDataAndOnShutdown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.json")
+	logger := slog.New(slog.DiscardHandler)
+	reset := time.Unix(2000000000, 0).UTC()
+
+	store := NewStore(path, logger)
+	store.Update(func(s *Snapshot) { s.LastSuccess[ResourceHosts] = time.Unix(1, 0) })
+	store.SetRateLimit(api.RateLimit{Limit: 2000, Remaining: 1500, Reset: reset})
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loadRemaining := func() int {
+		loaded := NewStore(path, logger)
+		loaded.Load()
+		return loaded.RateLimit().Remaining
+	}
+	if got := loadRemaining(); got != 1500 {
+		t.Fatalf("saved remaining = %d, want 1500", got)
+	}
+
+	// Only the rate limit changed: a periodic save skips the file...
+	store.SetRateLimit(api.RateLimit{Limit: 2000, Remaining: 900, Reset: reset})
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadRemaining(); got != 1500 {
+		t.Fatalf("remaining after a periodic save = %d, want 1500", got)
+	}
+	// ...the save on shutdown writes it.
+	if err := store.save(true); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadRemaining(); got != 900 {
+		t.Fatalf("remaining after the shutdown save = %d, want 900", got)
+	}
+}
+
+func TestCheckWritable(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	dir := t.TempDir()
+	if err := NewStore("", logger).CheckWritable(); err != nil {
+		t.Errorf("no path: %v", err)
+	}
+	if err := NewStore(filepath.Join(dir, "cache.json"), logger).CheckWritable(); err != nil {
+		t.Errorf("writable dir: %v", err)
+	}
+	if err := NewStore(dir, logger).CheckWritable(); err == nil {
+		t.Error("a directory as the cache file was accepted")
+	}
+	if err := NewStore(filepath.Join(dir, "missing", "cache.json"), logger).CheckWritable(); err == nil {
+		t.Error("a missing directory was accepted")
+	}
+}

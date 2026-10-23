@@ -14,6 +14,7 @@ const (
 	CollectorNetworks      Collector = "networks"      // IP networks
 	CollectorFeatures      Collector = "features"      // features (port aggregation, OOB access)
 	CollectorPowerFeeds    Collector = "power-feeds"   // power feeds
+	CollectorServices      Collector = "services"      // billed services and their prices
 )
 
 // Account-wide collectors.
@@ -26,6 +27,7 @@ const (
 // HostCollectors are fetched per server.
 var HostCollectors = []Collector{
 	CollectorConfiguration, CollectorDrives, CollectorPorts, CollectorNetworks, CollectorFeatures, CollectorPowerFeeds,
+	CollectorServices,
 }
 
 // Collectors lists every collector with a refresh interval.
@@ -34,7 +36,7 @@ var Collectors = append(append([]Collector{}, HostCollectors...), CollectorUplin
 // OptionalCollectors can be turned off.
 var OptionalCollectors = []Collector{
 	CollectorDrives, CollectorPorts, CollectorNetworks, CollectorFeatures, CollectorPowerFeeds,
-	CollectorUplinks, CollectorL2Segments,
+	CollectorServices, CollectorUplinks, CollectorL2Segments,
 }
 
 // DisabledCollectors is the set of turned off collectors. The zero value

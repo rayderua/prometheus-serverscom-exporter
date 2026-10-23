@@ -56,10 +56,6 @@ func main() {
 
 		hostsInterval = kingpin.Flag("refresh.hosts-interval", "How often to fetch the server list (power, statuses, labels) and download new and changed servers.").
 				Default("2m").Duration()
-		autoMinInterval = kingpin.Flag("refresh.auto-min-interval", "Lower bound of the auto refresh interval.").
-				Default("5m").Duration()
-		autoMaxInterval = kingpin.Flag("refresh.auto-max-interval", "Upper bound of the auto refresh interval.").
-				Default("24h").Duration()
 
 		cacheFile = kingpin.Flag("cache.file", "File to persist the cache to, so restarts do not refetch everything. Empty disables persistence.").
 				Default("").String()
@@ -73,6 +69,17 @@ func main() {
 		metricsPath = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").
 				Default("/metrics").String()
 		toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9920")
+
+		estimate = kingpin.Flag("estimate", "Print the refresh intervals and the API request estimate for the other flags, then exit. "+
+			"The output follows --log.format: JSON, or a table for logfmt. "+
+			"With a token, inventory sizes and the account limit come from the API (the server list and, with l2-segments, the segment list: a few requests); "+
+			"without one, from --cache.file. The --estimate.* flags override them.").Bool()
+		estimateHosts = kingpin.Flag("estimate.hosts", "Number of servers for --estimate, instead of the cache file.").
+				Default("-1").Int()
+		estimateSegments = kingpin.Flag("estimate.l2-segments", "Number of L2 segments for --estimate, instead of the cache file.").
+					Default("-1").Int()
+		estimateCatalogues = kingpin.Flag("estimate.uplink-catalogues", "Number of uplink catalogues (distinct location and server model pairs) for --estimate, instead of the cache file.").
+					Default("-1").Int()
 	)
 
 	// --[no-]collector.<name> for every optional collector.
@@ -82,23 +89,80 @@ func main() {
 			Default("true").Bool()
 	}
 
-	// --refresh.<name>-interval for every collector: a duration or auto.
-	intervals := map[cache.Collector]refresher.Interval{}
-	intervalFlags := map[cache.Collector]*refresher.Interval{}
+	// --refresh.<name>-interval for every collector.
+	intervals := map[cache.Collector]time.Duration{}
+	intervalFlags := map[cache.Collector]*time.Duration{}
 	for _, c := range cache.Collectors {
-		intervalFlags[c] = &refresher.Interval{}
-		kingpin.Flag("refresh."+string(c)+"-interval", "Refresh interval of "+string(c)+": a duration or auto. "+
-			"Auto collectors share the budget left after the fixed ones.").Default("auto").SetValue(intervalFlags[c])
+		intervalFlags[c] = kingpin.Flag("refresh."+string(c)+"-interval", "How often to refresh "+string(c)+". "+
+			"When the intervals do not fit into 80% of --api.requests-per-hour, they are all stretched by the same factor "+
+			"(serverscom_exporter_refresh_interval_stretch_factor).").
+			Default(refresher.FormatDuration(refresher.DefaultInterval(c))).Duration()
 	}
 
 	logConfig := &promslog.Config{}
 	promslogflag.AddFlags(kingpin.CommandLine, logConfig)
+	// JSON logs by default: easy to parse in Kubernetes. logfmt stays available.
+	kingpin.CommandLine.GetFlag(promslogflag.FormatFlagName).Default("json")
 	kingpin.Version(version.Print(exporterName))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
 	logger := promslog.New(logConfig)
 	logger.Info("Starting "+exporterName, "version", version.Info(), "build_context", version.BuildContext())
+
+	for c, i := range intervalFlags {
+		if *i <= 0 {
+			logger.Error("Refresh intervals must be positive; disable a collector with --no-collector.<name>",
+				"flag", "--refresh."+string(c)+"-interval", "value", *i)
+			os.Exit(1)
+		}
+		intervals[c] = *i
+	}
+	if *hostsInterval <= 0 {
+		logger.Error("Invalid --refresh.hosts-interval", "value", *hostsInterval)
+		os.Exit(1)
+	}
+	if *apiPageSize < 1 || *apiPageSize > maxPageSize {
+		logger.Error("Invalid --api.page-size", "value", *apiPageSize, "min", 1, "max", maxPageSize)
+		os.Exit(1)
+	}
+
+	disabled := cache.DisabledCollectors{}
+	for c, on := range collectorFlags {
+		if !*on {
+			disabled[c] = true
+		}
+	}
+
+	refresherConfig := refresher.Config{
+		HostsInterval: *hostsInterval,
+		Intervals:     intervals,
+		Disabled:      disabled,
+		PageSize:      *apiPageSize,
+		BudgetPerHour: *apiBudget,
+		Reserve:       *apiReserve,
+	}
+
+	if *estimate {
+		sizes, err := estimateSizes(*apiURL, *apiToken, *apiTokenFile, *apiTimeout, *apiPageSize, *cacheFile, refresherConfig, logger)
+		if err != nil {
+			logger.Error("Cannot get the inventory sizes", "err", err)
+			os.Exit(1)
+		}
+		for _, o := range []struct {
+			flag int
+			size *int
+		}{{*estimateHosts, &sizes.Hosts}, {*estimateSegments, &sizes.Segments}, {*estimateCatalogues, &sizes.UplinkCatalogues}} {
+			if o.flag >= 0 {
+				*o.size = o.flag
+			}
+		}
+		if err := refresher.PrintEstimate(os.Stdout, refresherConfig, sizes, logConfig.Format.String()); err != nil {
+			logger.Error("Cannot print the estimate", "err", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	token, err := readToken(*apiToken, *apiTokenFile)
 	if err != nil {
@@ -140,39 +204,19 @@ func main() {
 		"ratelimit_reserve", *apiReserve, "cache_file", *cacheFile, "extra_labels", fmt.Sprint(*extraLabels))
 
 	store := cache.NewStore(*cacheFile, logger.With("component", "cache"))
+	if err := store.CheckWritable(); err != nil {
+		logger.Error("Cannot write the cache file; fix the path or its permissions, or start without --cache.file",
+			"path", *cacheFile, "err", err)
+		os.Exit(1)
+	}
 	store.Load()
-
-	for c, i := range intervalFlags {
-		intervals[c] = *i
-	}
-	if *apiPageSize < 1 || *apiPageSize > maxPageSize {
-		logger.Error("Invalid --api.page-size", "value", *apiPageSize, "min", 1, "max", maxPageSize)
-		os.Exit(1)
-	}
-	if *autoMinInterval <= 0 || *autoMaxInterval < *autoMinInterval {
-		logger.Error("Invalid auto interval bounds", "min", *autoMinInterval, "max", *autoMaxInterval)
-		os.Exit(1)
-	}
-
-	disabled := cache.DisabledCollectors{}
-	for c, on := range collectorFlags {
-		if !*on {
-			disabled[c] = true
-		}
-	}
+	// The account rate limit state survives restarts in the cache file.
+	client.RestoreRateLimit(store.RateLimit())
+	client.OnRateLimit(store.SetRateLimit)
 
 	reg.MustRegister(collector.New(store, strings.Split(*hostLabels, ","), disabled))
 
-	ref := refresher.New(client, store, refresher.Config{
-		HostsInterval:   *hostsInterval,
-		Intervals:       intervals,
-		AutoMinInterval: *autoMinInterval,
-		AutoMaxInterval: *autoMaxInterval,
-		Disabled:        disabled,
-		PageSize:        *apiPageSize,
-		BudgetPerHour:   *apiBudget,
-		Reserve:         *apiReserve,
-	}, logger.With("component", "refresher"), reg)
+	ref := refresher.New(client, store, refresherConfig, logger.With("component", "refresher"), reg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -221,6 +265,7 @@ var collectorHelp = map[cache.Collector]string{
 	cache.CollectorNetworks:   "Fetch and expose IP networks of servers (serverscom_host_network_info). One request per server and refresh.",
 	cache.CollectorFeatures:   "Fetch and expose server features (serverscom_host_feature_*). Also needed for serverscom_host_uplink_aggregated. One request per server and refresh.",
 	cache.CollectorPowerFeeds: "Fetch and expose power feeds (serverscom_host_power_feed_*). One request per server and refresh.",
+	cache.CollectorServices:   "Fetch and expose billed services and their prices in the current billing period (serverscom_host_service_*). The API updates them once a day. One request per server and refresh.",
 	cache.CollectorUplinks:    "Fetch uplink model catalogues and expose serverscom_host_uplink_*.",
 	cache.CollectorL2Segments: "Fetch and expose L2 segments with members and networks (serverscom_l2_segment_*).",
 }
@@ -253,6 +298,45 @@ func newHTTPServer(registry *prometheus.Registry, metricsPath string, logger *sl
 	}
 
 	return &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}, nil
+}
+
+// estimateSizes returns the inventory sizes for --estimate: from the API
+// when a token is set, otherwise from the cache file. Without either all
+// sizes are 0: locations and racks then count as one page each, and servers,
+// segments and catalogues come from the --estimate.* flags.
+func estimateSizes(apiURL, token, tokenFile string, timeout time.Duration, pageSize int, cacheFile string,
+	cfg refresher.Config, logger *slog.Logger) (refresher.Sizes, error) {
+	if token != "" || tokenFile != "" {
+		token, err := readToken(token, tokenFile)
+		if err != nil {
+			return refresher.Sizes{}, err
+		}
+		client, err := api.NewClient(api.Options{
+			BaseURL:       apiURL,
+			Token:         token,
+			UserAgent:     exporterName + "/" + version.Version,
+			Timeout:       timeout,
+			PageSize:      pageSize,
+			BudgetPerHour: cfg.BudgetPerHour,
+			Reserve:       cfg.Reserve,
+			Logger:        logger.With("component", "api"),
+		})
+		if err != nil {
+			return refresher.Sizes{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		return refresher.FetchSizes(ctx, client, cfg)
+	}
+
+	store := cache.NewStore(cacheFile, logger.With("component", "cache"))
+	store.Load()
+	sizes := refresher.SizesOf(store.Snapshot())
+	sizes.Source = "flags"
+	if cacheFile != "" {
+		sizes.Source = "cache file " + cacheFile
+	}
+	return sizes, nil
 }
 
 // readToken returns the token from the flag/environment or from a file.

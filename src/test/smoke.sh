@@ -233,7 +233,7 @@ expect "successful API requests" '^serverscom_api_requests_total\{.*code="200".*
 expect_none "no failed API requests" '^serverscom_api_requests_total\{.*code="[^2]'
 expect "account rate limit" '^serverscom_api_ratelimit_remaining [0-9]'
 expect "hosts refreshed" '^serverscom_exporter_last_refresh_success_timestamp_seconds\{resource="hosts"\}'
-expect "auto intervals" '^serverscom_exporter_refresh_interval_auto\{loop="drives"\} 1$'
+expect "configured intervals fit" '^serverscom_exporter_refresh_interval_stretch_factor 1$'
 expect_none "no refresh errors" '^serverscom_exporter_refresh_errors_total\{.*\} [1-9]'
 
 if [[ -n "$PREVIOUS" ]]; then
@@ -290,7 +290,7 @@ expect_none "no aggregation state without features" '^serverscom_host_uplink_agg
 expect_none "no L2 segments" '^serverscom_l2_'
 expect_none "no refresh timestamps of disabled collectors" 'resource="(drives|features|l2-segments)"'
 expect "fixed ports interval" '^serverscom_exporter_refresh_interval_seconds\{.*loop="ports".*\} 900$'
-expect "ports interval is fixed" '^serverscom_exporter_refresh_interval_auto\{.*loop="ports".*\} 0$'
+expect "configured ports interval" '^serverscom_exporter_refresh_interval_configured_seconds\{.*loop="ports".*\} 900$'
 expect_none "disabled collectors are not estimated" 'loop="(drives|features|l2-segments)"'
 expect_none "no refresh errors" '^serverscom_exporter_refresh_errors_total\{.*\} [1-9]'
 

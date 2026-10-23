@@ -4,6 +4,7 @@ serverscom_api_budget_remaining
 serverscom_api_budget_reset_timestamp_seconds
 serverscom_api_budget_used
 serverscom_api_ratelimit_limit
+serverscom_api_ratelimit_paused
 serverscom_api_ratelimit_remaining
 serverscom_api_ratelimit_reserve
 serverscom_api_ratelimit_reset_timestamp_seconds
@@ -13,6 +14,7 @@ serverscom_api_request_duration_seconds_count{endpoint="dedicated_server_drive_s
 serverscom_api_request_duration_seconds_count{endpoint="dedicated_server_features"}
 serverscom_api_request_duration_seconds_count{endpoint="dedicated_server_networks"}
 serverscom_api_request_duration_seconds_count{endpoint="dedicated_server_power_feeds"}
+serverscom_api_request_duration_seconds_count{endpoint="dedicated_server_services"}
 serverscom_api_request_duration_seconds_count{endpoint="dedicated_servers"}
 serverscom_api_request_duration_seconds_count{endpoint="l2_segment_members"}
 serverscom_api_request_duration_seconds_count{endpoint="l2_segment_networks"}
@@ -26,6 +28,7 @@ serverscom_api_request_duration_seconds_sum{endpoint="dedicated_server_drive_slo
 serverscom_api_request_duration_seconds_sum{endpoint="dedicated_server_features"}
 serverscom_api_request_duration_seconds_sum{endpoint="dedicated_server_networks"}
 serverscom_api_request_duration_seconds_sum{endpoint="dedicated_server_power_feeds"}
+serverscom_api_request_duration_seconds_sum{endpoint="dedicated_server_services"}
 serverscom_api_request_duration_seconds_sum{endpoint="dedicated_servers"}
 serverscom_api_request_duration_seconds_sum{endpoint="l2_segment_members"}
 serverscom_api_request_duration_seconds_sum{endpoint="l2_segment_networks"}
@@ -41,6 +44,7 @@ serverscom_api_requests_total{code="200",endpoint="dedicated_server_drive_slots"
 serverscom_api_requests_total{code="200",endpoint="dedicated_server_features"}
 serverscom_api_requests_total{code="200",endpoint="dedicated_server_networks"}
 serverscom_api_requests_total{code="200",endpoint="dedicated_server_power_feeds"}
+serverscom_api_requests_total{code="200",endpoint="dedicated_server_services"}
 serverscom_api_requests_total{code="200",endpoint="dedicated_servers"}
 serverscom_api_requests_total{code="200",endpoint="l2_segment_members"}
 serverscom_api_requests_total{code="200",endpoint="l2_segment_networks"}
@@ -50,31 +54,29 @@ serverscom_api_requests_total{code="200",endpoint="racks"}
 serverscom_api_requests_total{code="200",endpoint="uplink_models"}
 serverscom_exporter_build_info{...}
 serverscom_exporter_full_refresh_requests_estimated
+serverscom_exporter_last_refresh_success_timestamp_seconds{resource="configuration"}
+serverscom_exporter_last_refresh_success_timestamp_seconds{resource="drives"}
+serverscom_exporter_last_refresh_success_timestamp_seconds{resource="features"}
 serverscom_exporter_last_refresh_success_timestamp_seconds{resource="host_details"}
 serverscom_exporter_last_refresh_success_timestamp_seconds{resource="hosts"}
 serverscom_exporter_last_refresh_success_timestamp_seconds{resource="l2-segments"}
+serverscom_exporter_last_refresh_success_timestamp_seconds{resource="networks"}
+serverscom_exporter_last_refresh_success_timestamp_seconds{resource="ports"}
+serverscom_exporter_last_refresh_success_timestamp_seconds{resource="power-feeds"}
 serverscom_exporter_last_refresh_success_timestamp_seconds{resource="reference"}
+serverscom_exporter_last_refresh_success_timestamp_seconds{resource="services"}
 serverscom_exporter_last_refresh_success_timestamp_seconds{resource="uplinks"}
-serverscom_exporter_refresh_interval_auto{loop="configuration"}
-serverscom_exporter_refresh_interval_auto{loop="drives"}
-serverscom_exporter_refresh_interval_auto{loop="features"}
-serverscom_exporter_refresh_interval_auto{loop="hosts"}
-serverscom_exporter_refresh_interval_auto{loop="l2-segments"}
-serverscom_exporter_refresh_interval_auto{loop="networks"}
-serverscom_exporter_refresh_interval_auto{loop="ports"}
-serverscom_exporter_refresh_interval_auto{loop="power-feeds"}
-serverscom_exporter_refresh_interval_auto{loop="reference"}
-serverscom_exporter_refresh_interval_auto{loop="uplinks"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="configuration"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="drives"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="features"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="hosts"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="l2-segments"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="networks"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="ports"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="power-feeds"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="reference"}
-serverscom_exporter_refresh_interval_recommended_seconds{loop="uplinks"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="configuration"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="drives"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="features"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="hosts"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="l2-segments"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="networks"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="ports"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="power-feeds"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="reference"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="services"}
+serverscom_exporter_refresh_interval_configured_seconds{loop="uplinks"}
 serverscom_exporter_refresh_interval_seconds{loop="configuration"}
 serverscom_exporter_refresh_interval_seconds{loop="drives"}
 serverscom_exporter_refresh_interval_seconds{loop="features"}
@@ -84,7 +86,9 @@ serverscom_exporter_refresh_interval_seconds{loop="networks"}
 serverscom_exporter_refresh_interval_seconds{loop="ports"}
 serverscom_exporter_refresh_interval_seconds{loop="power-feeds"}
 serverscom_exporter_refresh_interval_seconds{loop="reference"}
+serverscom_exporter_refresh_interval_seconds{loop="services"}
 serverscom_exporter_refresh_interval_seconds{loop="uplinks"}
+serverscom_exporter_refresh_interval_stretch_factor
 serverscom_exporter_requests_per_hour_estimated{loop="configuration"}
 serverscom_exporter_requests_per_hour_estimated{loop="drives"}
 serverscom_exporter_requests_per_hour_estimated{loop="features"}
@@ -94,6 +98,7 @@ serverscom_exporter_requests_per_hour_estimated{loop="networks"}
 serverscom_exporter_requests_per_hour_estimated{loop="ports"}
 serverscom_exporter_requests_per_hour_estimated{loop="power-feeds"}
 serverscom_exporter_requests_per_hour_estimated{loop="reference"}
+serverscom_exporter_requests_per_hour_estimated{loop="services"}
 serverscom_exporter_requests_per_hour_estimated{loop="uplinks"}
 serverscom_host_configuration_info{bandwidth="20 TB",host_id="srv-1",location="AMS1",operating_system="Ubuntu 24.04",private_uplink="Private 2x10G",public_uplink="Public 2x10G",rack="R1",server_model="Dell
 serverscom_host_configuration_info{bandwidth="20 TB",host_id="srv-2",location="AMS1",operating_system="Ubuntu 24.04",private_uplink="Private 2x10G",public_uplink="Public 2x10G",rack="R1",server_model="Dell
@@ -117,6 +122,8 @@ serverscom_host_details_last_refresh_timestamp_seconds{collector="ports",host_id
 serverscom_host_details_last_refresh_timestamp_seconds{collector="ports",host_id="srv-2",location="AMS1",rack="R1",title="node-2"}
 serverscom_host_details_last_refresh_timestamp_seconds{collector="power-feeds",host_id="srv-1",location="AMS1",rack="R1",title="node-1"}
 serverscom_host_details_last_refresh_timestamp_seconds{collector="power-feeds",host_id="srv-2",location="AMS1",rack="R1",title="node-2"}
+serverscom_host_details_last_refresh_timestamp_seconds{collector="services",host_id="srv-1",location="AMS1",rack="R1",title="node-1"}
+serverscom_host_details_last_refresh_timestamp_seconds{collector="services",host_id="srv-2",location="AMS1",rack="R1",title="node-2"}
 serverscom_host_drive_capacity{host_id="srv-1",location="AMS1",position="0",rack="R1",title="node-1"}
 serverscom_host_drive_capacity{host_id="srv-2",location="AMS1",position="0",rack="R1",title="node-2"}
 serverscom_host_drive_slot_info{drive_model="",form_factor="2.5",host_id="srv-1",interface="SATA3",location="AMS1",media_type="",populated="false",position="1",rack="R1",title="node-1"}
@@ -151,6 +158,18 @@ serverscom_host_powered_on{host_id="srv-1",location="AMS1",rack="R1",title="node
 serverscom_host_powered_on{host_id="srv-2",location="AMS1",rack="R1",title="node-2"}
 serverscom_host_ram_size{host_id="srv-1",location="AMS1",rack="R1",title="node-1"}
 serverscom_host_ram_size{host_id="srv-2",location="AMS1",rack="R1",title="node-2"}
+serverscom_host_service_price{currency="USD",host_id="srv-1",location="AMS1",rack="R1",service="Bandwidth 20
+serverscom_host_service_price{currency="USD",host_id="srv-1",location="AMS1",rack="R1",service="Server
+serverscom_host_service_price{currency="USD",host_id="srv-2",location="AMS1",rack="R1",service="Bandwidth 20
+serverscom_host_service_price{currency="USD",host_id="srv-2",location="AMS1",rack="R1",service="Server
+serverscom_host_service_subtotal{currency="USD",host_id="srv-1",location="AMS1",rack="R1",service="Bandwidth 20
+serverscom_host_service_subtotal{currency="USD",host_id="srv-1",location="AMS1",rack="R1",service="Server
+serverscom_host_service_subtotal{currency="USD",host_id="srv-2",location="AMS1",rack="R1",service="Bandwidth 20
+serverscom_host_service_subtotal{currency="USD",host_id="srv-2",location="AMS1",rack="R1",service="Server
+serverscom_host_service_tax{currency="USD",host_id="srv-1",location="AMS1",rack="R1",service="Bandwidth 20
+serverscom_host_service_tax{currency="USD",host_id="srv-1",location="AMS1",rack="R1",service="Server
+serverscom_host_service_tax{currency="USD",host_id="srv-2",location="AMS1",rack="R1",service="Bandwidth 20
+serverscom_host_service_tax{currency="USD",host_id="srv-2",location="AMS1",rack="R1",service="Server
 serverscom_host_status{host_id="srv-1",location="AMS1",rack="R1",status="active",title="node-1"}
 serverscom_host_status{host_id="srv-2",location="AMS1",rack="R1",status="active",title="node-2"}
 serverscom_host_uplink_aggregated{host_id="srv-1",location="AMS1",rack="R1",title="node-1",uplink="private"}

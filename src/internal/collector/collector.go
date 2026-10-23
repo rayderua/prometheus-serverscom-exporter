@@ -66,6 +66,9 @@ type Collector struct {
 	hostFeatureEnabled     *prometheus.Desc
 	hostPowerFeedStatus    *prometheus.Desc
 	hostPowerFeedUp        *prometheus.Desc
+	hostServicePrice       *prometheus.Desc
+	hostServiceSubtotal    *prometheus.Desc
+	hostServiceTax         *prometheus.Desc
 	hostUplinkInfo         *prometheus.Desc
 	hostUplinkRedundant    *prometheus.Desc
 	hostUplinkAggregated   *prometheus.Desc
@@ -138,6 +141,16 @@ func New(store *cache.Store, allowedHostLabels []string, disabled cache.Disabled
 			"feed", "type", "status"),
 		hostPowerFeedUp: hostDesc("power_feed_up", "Whether a server power feed is on (1) or not (0).",
 			"feed"),
+		hostServicePrice: hostDesc("service_price",
+			"Price of a billed service of the server in the current billing period, tax included, in the given currency. "+
+				"Services with the same name and type are summed. Updated by the API once a day.",
+			"service", "type", "currency"),
+		hostServiceSubtotal: hostDesc("service_subtotal",
+			"Price of a billed service of the server in the current billing period, without tax, in the given currency.",
+			"service", "type", "currency"),
+		hostServiceTax: hostDesc("service_tax",
+			"Tax of a billed service of the server in the current billing period, in the given currency.",
+			"service", "type", "currency"),
 		hostUplinkInfo: hostDesc("uplink_info", "Uplink model of the server.",
 			"uplink", "model", "speed"),
 		hostUplinkRedundant: hostDesc("uplink_redundant",
@@ -280,8 +293,41 @@ func (c *Collector) collectHostDetails(ch chan<- prometheus.Metric, snapshot *ca
 		}
 	}
 
+	if c.enabled(cache.CollectorServices) {
+		c.collectServices(ch, d.Services, common)
+	}
+
 	if c.enabled(cache.CollectorUplinks) {
 		c.collectUplinks(ch, snapshot, host, features, common)
+	}
+}
+
+// collectServices exposes the prices of a server's services. Services with
+// the same name, type and currency (e.g. two additional networks) are summed,
+// so the series stay unique.
+func (c *Collector) collectServices(ch chan<- prometheus.Metric, services []api.Service, common []string) {
+	type key struct{ name, typ, currency string }
+	type amounts struct{ total, subtotal, tax float64 }
+	sums := map[key]*amounts{}
+	var order []key
+	for _, s := range services {
+		k := key{s.Name, s.Type, s.Currency}
+		a, ok := sums[k]
+		if !ok {
+			a = &amounts{}
+			sums[k] = a
+			order = append(order, k)
+		}
+		a.total += s.Total
+		a.subtotal += s.Subtotal
+		a.tax += s.Tax
+	}
+	for _, k := range order {
+		a := sums[k]
+		labels := with(common, k.name, k.typ, k.currency)
+		gauge(ch, c.hostServicePrice, a.total, labels...)
+		gauge(ch, c.hostServiceSubtotal, a.subtotal, labels...)
+		gauge(ch, c.hostServiceTax, a.tax, labels...)
 	}
 }
 

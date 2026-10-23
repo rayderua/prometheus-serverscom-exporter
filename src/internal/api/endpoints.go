@@ -48,6 +48,12 @@ func (c *Client) ListPowerFeeds(ctx context.Context, serverID string) ([]PowerFe
 	return list[PowerFeed](ctx, c, "dedicated_server_power_feeds", serverPath(serverID, "/power_feeds"))
 }
 
+// ListServices returns billed services of a server in the current billing
+// period. The API updates them once a day.
+func (c *Client) ListServices(ctx context.Context, serverID string) ([]Service, error) {
+	return list[Service](ctx, c, "dedicated_server_services", serverPath(serverID, "/services"))
+}
+
 // ListL2Segments returns all L2 segments of the account.
 func (c *Client) ListL2Segments(ctx context.Context) ([]L2Segment, error) {
 	return list[L2Segment](ctx, c, "l2_segments", "/l2_segments")

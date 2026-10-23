@@ -1,20 +1,23 @@
 // Package refresher keeps the cache up to date while spending as few API
 // requests as possible.
 //
-// Every collector (API endpoint) has its own refresh interval, fixed or auto:
+// Every collector (API endpoint) has its own refresh interval:
 //
-//	hosts         the server list: power, statuses, labels, updated_at (fixed)
+//	hosts         the server list: power, statuses, labels, updated_at
 //	host_details  all collectors of new servers and servers whose updated_at
 //	              changed, checked every hosts interval (outside the schedule)
-//	per server    configuration, drives, ports, networks, features, power-feeds:
-//	              one queue per collector, oldest server first, requests spread
-//	              evenly over the interval
+//	per server    configuration, drives, ports, networks, features, power-feeds,
+//	              services:
+//	              one queue per collector, oldest server first; every server
+//	              whose data is older than the interval is fetched right away,
+//	              one request after another
 //	account-wide  uplinks, l2-segments, reference
 //
-// Auto collectors share one interval: the budget left after the fixed ones,
-// minus a headroom, divided by their cost (see demand.go). When the budget
-// window runs low, auto collectors pause first and leave the rest to the
-// fixed ones and to new servers.
+// When the intervals do not fit into 80% of the request budget, every loop
+// but the server list is stretched by the same factor; the list too if it
+// does not fit on its own (see demand.go). When
+// the budget window runs low anyway, those loops pause and leave the rest to
+// the server list and to new servers.
 package refresher
 
 import (
@@ -42,6 +45,7 @@ type API interface {
 	ListNetworks(ctx context.Context, serverID string) ([]api.Network, error)
 	ListFeatures(ctx context.Context, serverID string) ([]api.Feature, error)
 	ListPowerFeeds(ctx context.Context, serverID string) ([]api.PowerFeed, error)
+	ListServices(ctx context.Context, serverID string) ([]api.Service, error)
 	ListL2Segments(ctx context.Context) ([]api.L2Segment, error)
 	ListL2Members(ctx context.Context, segmentID string) ([]api.L2Member, error)
 	ListL2Networks(ctx context.Context, segmentID string) ([]api.Network, error)
@@ -58,35 +62,31 @@ type Config struct {
 	// servers are downloaded on the same schedule.
 	HostsInterval time.Duration
 
-	// Intervals per collector; a missing entry is auto.
-	Intervals map[cache.Collector]Interval
-
-	// Bounds of the auto interval.
-	AutoMinInterval time.Duration
-	AutoMaxInterval time.Duration
+	// Intervals per collector; a missing entry is DefaultInterval.
+	Intervals map[cache.Collector]time.Duration
 
 	// Disabled collectors are not fetched.
 	Disabled cache.DisabledCollectors
 
-	// The API client settings below are used to compute the auto interval,
-	// to estimate the request demand and to recommend a budget.
+	// The API client settings below are used to stretch the intervals, to
+	// estimate the request demand and to recommend a budget.
 	PageSize      int
 	BudgetPerHour int
 	Reserve       int
 }
 
 // interval returns the configured interval of c.
-func (c Config) interval(collector cache.Collector) Interval {
-	if i, ok := c.Intervals[collector]; ok {
+func (c Config) interval(collector cache.Collector) time.Duration {
+	if i, ok := c.Intervals[collector]; ok && i > 0 {
 		return i
 	}
-	return AutoInterval
+	return DefaultInterval(collector)
 }
 
 // Timing of the schedulers.
 const (
 	// recheckPeriod is the longest a loop sleeps before looking again: the
-	// auto interval and the set of servers change while it waits.
+	// stretch and the set of servers change while it waits.
 	recheckPeriod = time.Minute
 
 	// retryDelay is the pause after a failed run of an account-wide loop.
@@ -103,10 +103,10 @@ type Refresher struct {
 	errors *prometheus.CounterVec
 	demand *demandMetrics
 
-	// autoInterval is the current auto interval in nanoseconds; 0 until the
-	// first estimate.
-	autoInterval atomic.Int64
-	autoPaused   atomic.Bool // auto collectors wait for the budget to reset
+	// effective holds the effective interval of every loop by name from the
+	// last estimate; nil until the first one, which means the configured ones.
+	effective atomic.Pointer[map[string]time.Duration]
+	paused    atomic.Bool // stretchable loops wait for the budget to reset
 
 	demandMu  sync.Mutex
 	lastState string // last logged demand state, to log only changes
@@ -134,15 +134,26 @@ func New(client API, store *cache.Store, cfg Config, logger *slog.Logger, reg pr
 
 func (r *Refresher) enabled(c cache.Collector) bool { return r.cfg.Disabled.Enabled(c) }
 
-// interval returns the effective interval of c.
+// interval returns the effective interval of c: the configured one,
+// stretched when the loops do not fit into the budget.
 func (r *Refresher) interval(c cache.Collector) time.Duration {
-	if i := r.cfg.interval(c); !i.Auto {
-		return i.Fixed
+	return r.effectiveInterval(string(c), r.cfg.interval(c))
+}
+
+// hostsInterval returns the effective interval of the server list.
+func (r *Refresher) hostsInterval() time.Duration {
+	return r.effectiveInterval(string(cache.ResourceHosts), r.cfg.HostsInterval)
+}
+
+// effectiveInterval returns the interval of loop from the last estimate, or
+// configured before the first one.
+func (r *Refresher) effectiveInterval(loop string, configured time.Duration) time.Duration {
+	if m := r.effective.Load(); m != nil {
+		if d, ok := (*m)[loop]; ok && d > 0 {
+			return d
+		}
 	}
-	if d := time.Duration(r.autoInterval.Load()); d > 0 {
-		return d
-	}
-	return r.cfg.AutoMaxInterval // no estimate yet
+	return configured
 }
 
 // prepareCache removes data of disabled collectors, e.g. loaded from a cache
@@ -203,6 +214,8 @@ func copyHostCollector(dst, src *cache.HostDetails, c cache.Collector) {
 		dst.Features = src.Features
 	case cache.CollectorPowerFeeds:
 		dst.PowerFeeds = src.PowerFeeds
+	case cache.CollectorServices:
+		dst.Services = src.Services
 	}
 }
 
@@ -221,11 +234,14 @@ func (r *Refresher) Run(ctx context.Context) {
 	}
 	for _, c := range cache.Collectors {
 		if r.enabled(c) {
-			attrs = append(attrs, string(c)+"_interval", r.cfg.interval(c).String())
+			attrs = append(attrs, string(c)+"_interval", formatDuration(r.cfg.interval(c)))
 		}
 	}
-	attrs = append(attrs, "auto_min_interval", r.cfg.AutoMinInterval, "auto_max_interval", r.cfg.AutoMaxInterval)
 	r.logger.Info("Refresher started", attrs...)
+
+	// With a cache file the estimate is available before the first API
+	// request, which may have to wait for the rate limit.
+	r.updateDemand()
 
 	// On a cold start fetch racks first: host metrics carry the rack name, and
 	// without the rack list they would briefly expose rack IDs, leaving stale
@@ -238,13 +254,13 @@ func (r *Refresher) Run(ctx context.Context) {
 	}
 
 	// Fetch the server list once before starting the loops, so the other
-	// loops have servers and an auto interval right away.
+	// loops have servers and the stretch right away.
 	if err := r.refreshHosts(ctx); err != nil {
 		r.errors.WithLabelValues(string(cache.ResourceHosts)).Inc()
 		r.logger.Warn("Initial hosts refresh failed", "err", err)
 	}
 
-	hostsInterval := func() time.Duration { return r.cfg.HostsInterval }
+	hostsInterval := r.hostsInterval
 	loops := []func(){
 		func() { r.loop(ctx, cache.ResourceHosts, hostsInterval, false, r.refreshHosts) },
 		func() { r.loop(ctx, cache.ResourceHostDetails, hostsInterval, false, r.refreshDetails) },
@@ -261,7 +277,7 @@ func (r *Refresher) Run(ctx context.Context) {
 	} {
 		if r.enabled(c) {
 			interval := func() time.Duration { return r.interval(c) }
-			loops = append(loops, func() { r.loop(ctx, cache.Resource(c), interval, r.cfg.interval(c).Auto, refresh) })
+			loops = append(loops, func() { r.loop(ctx, cache.Resource(c), interval, true, refresh) })
 		}
 	}
 
@@ -273,8 +289,9 @@ func (r *Refresher) Run(ctx context.Context) {
 }
 
 // loop runs refresh whenever the last success of resource is older than
-// interval, and retries failures after retryDelay at the latest.
-func (r *Refresher) loop(ctx context.Context, resource cache.Resource, interval func() time.Duration, auto bool,
+// interval, and retries failures after retryDelay at the latest. Stretchable
+// loops wait while the budget window is running low.
+func (r *Refresher) loop(ctx context.Context, resource cache.Resource, interval func() time.Duration, stretchable bool,
 	refresh func(context.Context) error) {
 	var lastFailure time.Time
 	for {
@@ -290,7 +307,7 @@ func (r *Refresher) loop(ctx context.Context, resource cache.Resource, interval 
 			}
 			continue
 		}
-		if auto && !r.waitForAutoBudget(ctx) {
+		if stretchable && !r.waitForBudget(ctx) {
 			return
 		}
 
@@ -309,23 +326,16 @@ func (r *Refresher) loop(ctx context.Context, resource cache.Resource, interval 
 	}
 }
 
-// hostLoop refreshes collector c of every server with details, oldest first,
-// spreading the requests evenly over the interval: a server every
-// interval/servers.
+// hostLoop refreshes collector c of every server with details, oldest first:
+// every server whose data is older than the interval is fetched right away,
+// one request after another, then the loop sleeps until the next one is due.
 func (r *Refresher) hostLoop(ctx context.Context, c cache.Collector) {
 	resource := cache.Resource(c)
-	auto := r.cfg.interval(c).Auto
-	var lastRequest time.Time
 	for {
-		interval := r.interval(c)
 		target, servers := r.oldestHost(c)
 		wait := recheckPeriod
 		if servers > 0 {
-			next := lastRequest.Add(interval / time.Duration(servers)) // pacing
-			if due := target.fetchedAt.Add(interval); due.After(next) {
-				next = due
-			}
-			wait = time.Until(next)
+			wait = time.Until(target.fetchedAt.Add(r.interval(c)))
 		}
 		if wait > 0 {
 			if !sleep(ctx, min(wait, recheckPeriod)) {
@@ -333,11 +343,10 @@ func (r *Refresher) hostLoop(ctx context.Context, c cache.Collector) {
 			}
 			continue
 		}
-		if auto && !r.waitForAutoBudget(ctx) {
+		if !r.waitForBudget(ctx) {
 			return
 		}
 
-		lastRequest = time.Now()
 		err := r.refreshHostCollector(ctx, c, target.id)
 		switch {
 		case ctx.Err() != nil:
@@ -382,26 +391,23 @@ func (r *Refresher) oldestHost(c cache.Collector) (oldest hostTarget, servers in
 	return oldest, servers
 }
 
-// autoBudgetShare is the share of the budget auto collectors may use; the
-// rest is left for fixed collectors, new and changed servers and retries.
-const autoBudgetShare = 0.8
-
-// waitForAutoBudget blocks while the budget window has no more than the
-// headroom left, so fixed collectors get the rest. It returns false when ctx
-// is cancelled.
-func (r *Refresher) waitForAutoBudget(ctx context.Context) bool {
-	headroom := int(float64(r.cfg.BudgetPerHour) * (1 - autoBudgetShare))
+// waitForBudget blocks while the budget window has no more than the headroom
+// (1 - budgetShare) left, which is kept for the server list and new servers.
+// It returns false when ctx is cancelled.
+func (r *Refresher) waitForBudget(ctx context.Context) bool {
+	headroom := int(float64(r.cfg.BudgetPerHour) * (1 - budgetShare))
 	for r.api.BudgetRemaining() <= headroom {
-		if r.autoPaused.CompareAndSwap(false, true) {
-			r.logger.Info("Request budget is running low, auto collectors wait for the reset",
-				"budget_remaining", r.api.BudgetRemaining(), "kept_for_fixed", headroom)
+		if r.paused.CompareAndSwap(false, true) {
+			r.logger.Info("Request budget is running low, refresh loops wait for the reset; "+
+				"the server list and new servers keep going",
+				"budget_remaining", r.api.BudgetRemaining(), "kept", headroom)
 		}
 		if !sleep(ctx, recheckPeriod) {
 			return false
 		}
 	}
-	if r.autoPaused.CompareAndSwap(true, false) {
-		r.logger.Info("Request budget reset, auto collectors resume")
+	if r.paused.CompareAndSwap(true, false) {
+		r.logger.Info("Request budget reset, refresh loops resume")
 	}
 	return true
 }
@@ -568,6 +574,9 @@ func (r *Refresher) fetchHostCollector(ctx context.Context, c cache.Collector, i
 	case cache.CollectorPowerFeeds:
 		v, err := r.api.ListPowerFeeds(ctx, id)
 		return func(d *cache.HostDetails) { d.PowerFeeds = v }, err
+	case cache.CollectorServices:
+		v, err := r.api.ListServices(ctx, id)
+		return func(d *cache.HostDetails) { d.Services = v }, err
 	}
 	return nil, fmt.Errorf("unknown host collector %q", c)
 }
@@ -594,6 +603,7 @@ func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 	}
 
 	partial := false
+	fetched := []cache.Collector{cache.CollectorConfiguration}
 	for _, c := range cache.HostCollectors {
 		if c == cache.CollectorConfiguration || !r.enabled(c) {
 			continue
@@ -603,6 +613,7 @@ func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 		case err == nil:
 			store(details)
 			details.Fetched[c] = time.Now()
+			fetched = append(fetched, c)
 		case api.IsRateLimited(err), ctx.Err() != nil:
 			return err
 		default:
@@ -625,6 +636,12 @@ func (r *Refresher) refreshHostDetails(ctx context.Context, id string) error {
 		}
 		// The single-object response is fresher than the list entry.
 		s.Hosts[id] = &cache.Host{Server: *server, Details: details}
+		// The collectors fetched here count as refreshed, so their data age
+		// and staleness do not wait for their own loop's first pass.
+		now := time.Now()
+		for _, c := range fetched {
+			s.LastSuccess[cache.Resource(c)] = now
+		}
 	})
 	r.ensureUplinkModels(ctx, server)
 

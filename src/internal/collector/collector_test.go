@@ -139,3 +139,31 @@ func TestSanitizeLabelName(t *testing.T) {
 		}
 	}
 }
+
+func TestServicePricesAreSummedByNameAndType(t *testing.T) {
+	store := cache.NewStore("", slog.New(slog.DiscardHandler))
+	store.Update(func(s *cache.Snapshot) {
+		s.Hosts["h1"] = &cache.Host{
+			Server: api.DedicatedServer{ID: "h1", Title: "node-1", LocationCode: "ams1", RackID: "r1"},
+			Details: &cache.HostDetails{Fetched: map[cache.Collector]time.Time{}, Services: []api.Service{
+				{Name: "Server hardware", Type: "server_base", Currency: "USD", Total: 250, Subtotal: 250},
+				{Name: "Additional IPv4", Type: "ip_network", Currency: "USD", Total: 12, Subtotal: 10, Tax: 2},
+				{Name: "Additional IPv4", Type: "ip_network", Currency: "USD", Total: 12, Subtotal: 10, Tax: 2},
+			}},
+		}
+	})
+	expected := `
+# HELP serverscom_host_service_price Price of a billed service of the server in the current billing period, tax included, in the given currency. Services with the same name and type are summed. Updated by the API once a day.
+# TYPE serverscom_host_service_price gauge
+serverscom_host_service_price{currency="USD",host_id="h1",location="ams1",rack="r1",service="Additional IPv4",title="node-1",type="ip_network"} 24
+serverscom_host_service_price{currency="USD",host_id="h1",location="ams1",rack="r1",service="Server hardware",title="node-1",type="server_base"} 250
+# HELP serverscom_host_service_tax Tax of a billed service of the server in the current billing period, in the given currency.
+# TYPE serverscom_host_service_tax gauge
+serverscom_host_service_tax{currency="USD",host_id="h1",location="ams1",rack="r1",service="Additional IPv4",title="node-1",type="ip_network"} 4
+serverscom_host_service_tax{currency="USD",host_id="h1",location="ams1",rack="r1",service="Server hardware",title="node-1",type="server_base"} 0
+`
+	if err := testutil.CollectAndCompare(New(store, nil, nil), strings.NewReader(expected),
+		"serverscom_host_service_price", "serverscom_host_service_tax"); err != nil {
+		t.Fatal(err)
+	}
+}

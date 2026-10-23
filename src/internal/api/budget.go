@@ -9,17 +9,23 @@ import (
 // budget is the exporter's own request limit: at most limit requests per
 // window, counted the same way as the API rate limit.
 //
-// A window opens with the first request after the previous one has ended.
+// The window follows the account rate limit window: align moves its end to
+// X-RateLimit-Reset, and when the account window resets, the budget starts
+// over too. Until the API has reported a reset (or after it has passed), a
+// window opens with the first request and lasts one window length.
+//
 // Requests are never delayed while the window has room; once it is used up,
 // callers wait until the window resets.
 type budget struct {
 	limit  int
 	window time.Duration
 
-	mu        sync.Mutex
-	start     time.Time // start of the current window; zero before the first request
-	used      int
-	exhausted bool // the current window ran out at least once
+	mu           sync.Mutex
+	end          time.Time // end of the current window; zero before the first request
+	accountReset time.Time // last X-RateLimit-Reset passed to align
+	sinceReset   int       // requests reserved since accountReset passed
+	used         int
+	exhausted    bool // the current window ran out at least once
 }
 
 func newBudget(limit int, window time.Duration) *budget {
@@ -58,17 +64,53 @@ func (b *budget) reserve(now time.Time) (delay time.Duration, firstExhaustion bo
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.start.IsZero() || !now.Before(b.start.Add(b.window)) {
-		b.start, b.used, b.exhausted = now, 0, false
+	if !now.Before(b.end) {
+		b.end, b.used, b.exhausted = now.Add(b.window), 0, false
 	}
 	if b.used < b.limit {
 		b.used++
+		if !b.accountReset.IsZero() && !now.Before(b.accountReset) {
+			b.sinceReset++
+		}
 		return 0, false, b.stateLocked(now)
 	}
 
 	firstExhaustion = !b.exhausted
 	b.exhausted = true
-	return b.start.Add(b.window).Sub(now), firstExhaustion, b.stateLocked(now)
+	return b.end.Sub(now), firstExhaustion, b.stateLocked(now)
+}
+
+// align makes the window end when the account rate limit window resets.
+// reset is X-RateLimit-Reset of a response received at now.
+//
+//   - the previously reported reset has passed: the account window has reset,
+//     so the budget starts over and ends with the new account window; the
+//     requests reserved since the reset are counted in it;
+//   - reset before the end of the budget window: the budget window opened in
+//     the middle of the account window and now ends with it.
+//
+// Resets in the past or more than one window ahead are ignored.
+func (b *budget) align(reset, now time.Time) {
+	if !reset.After(now) || reset.After(now.Add(b.window)) {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	prev := b.accountReset
+	if !reset.Equal(prev) {
+		b.accountReset = reset
+		defer func() { b.sinceReset = 0 }()
+	}
+	switch {
+	case !now.Before(b.end):
+		// No open window: the next request opens one ending at the reset.
+		b.end, b.used, b.exhausted = reset, 0, false
+	case !prev.IsZero() && !now.Before(prev):
+		b.end, b.used, b.exhausted = reset, max(b.sinceReset, 1), false
+	case reset.Before(b.end):
+		b.end = reset
+	}
 }
 
 // state returns the current window state.
@@ -79,13 +121,13 @@ func (b *budget) state(now time.Time) budgetState {
 }
 
 func (b *budget) stateLocked(now time.Time) budgetState {
-	if b.start.IsZero() || !now.Before(b.start.Add(b.window)) {
+	if !now.Before(b.end) || (b.used == 0 && !b.exhausted) {
 		return budgetState{Remaining: b.limit}
 	}
 	return budgetState{
 		Used:      b.used,
 		Remaining: b.limit - b.used,
-		Reset:     b.start.Add(b.window),
+		Reset:     b.end,
 		Exhausted: b.exhausted,
 	}
 }
