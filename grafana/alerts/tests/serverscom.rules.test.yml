@@ -204,13 +204,11 @@ tests:
                 The exporter used up --api.requests-per-hour and waits for the hourly reset; data gets stale
                 meanwhile. Compare serverscom_api_requests_per_hour_recommended with the budget.
 
-  # Demand above the budget, account close to its limit, rejected token.
+  # Intervals stretched, account close to its limit, rejected token.
   - interval: 1m
     input_series:
-      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="features"}'
-        values: '468x40'
-      - series: 'serverscom_exporter_requests_per_hour_estimated{job="sc",instance="x",loop="hosts"}'
-        values: '30x40'
+      - series: 'serverscom_exporter_refresh_interval_stretch_factor{job="sc",instance="x"}'
+        values: '1.25x40'
       - series: 'serverscom_api_requests_budget_per_hour{job="sc",instance="x"}'
         values: '400x40'
       - series: 'serverscom_api_ratelimit_remaining{job="sc",instance="x"}'
@@ -227,10 +225,11 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, job: sc, instance: x}
             exp_annotations:
-              summary: Servers.com exporter configuration needs more requests than its budget
+              summary: Servers.com exporter refresh intervals are stretched to fit its budget
               description: >-
-                The configured refresh intervals need about 498 requests per hour, more than
-                --api.requests-per-hour. The exporter log recommends the flags to change.
+                The configured refresh intervals need more than 80% of --api.requests-per-hour, so the exporter
+                runs them 1.25 times less often. Raise the budget to serverscom_api_requests_per_hour_recommended
+                or the intervals.
       - eval_time: 6m
         alertname: ServerscomAPIRateLimitLow
         exp_alerts:

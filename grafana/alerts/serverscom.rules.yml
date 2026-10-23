@@ -188,24 +188,26 @@ groups:
         Compare serverscom_api_requests_per_hour_recommended with the budget.
   - alert: ServerscomExporterDemandExceedsBudget
     expr: |-
-      sum by (job, instance) (serverscom_exporter_requests_per_hour_estimated)
-      > on (job, instance) serverscom_api_requests_budget_per_hour
+      serverscom_exporter_refresh_interval_stretch_factor > 1
     for: 30m
     labels:
       severity: warning
     annotations:
-      summary: Servers.com exporter configuration needs more requests than its budget
-      description: The configured refresh intervals need about {{ $value | humanize }} requests per hour, more than --api.requests-per-hour.
-        The exporter log recommends the flags to change.
+      summary: Servers.com exporter refresh intervals are stretched to fit its budget
+      description: The configured refresh intervals need more than 80% of --api.requests-per-hour, so the exporter runs them {{ $value | humanize }} times less often. Raise the budget to serverscom_api_requests_per_hour_recommended or the intervals.
   - alert: ServerscomExporterIntervalsTooShort
-    expr: serverscom_exporter_refresh_interval_recommended_seconds != serverscom_exporter_refresh_interval_seconds
+    expr: |-
+      sum by (job, instance) (
+        serverscom_exporter_requests_per_hour_estimated
+        * serverscom_exporter_refresh_interval_seconds / serverscom_exporter_refresh_interval_configured_seconds
+      )
+      > on (job, instance) 0.8 * (serverscom_api_ratelimit_limit - serverscom_api_ratelimit_reserve)
     for: 30m
     labels:
       severity: warning
     annotations:
-      summary: Servers.com {{ $labels.loop }} refresh interval is too short for the account limit
-      description: The {{ $labels.loop }} refresh interval needs more requests than the account limit leaves for the exporter;
-        the recommended interval is {{ $value | humanizeDuration }}.
+      summary: Servers.com exporter refresh intervals are too short for the account limit
+      description: The configured refresh intervals need about {{ $value | humanize }} requests per hour, more than the account limit leaves for the exporter even with the largest budget; they are stretched. Raise the intervals.
   - alert: ServerscomAPIRateLimitLow
     expr: |-
       serverscom_api_ratelimit_remaining <= 1.5 * serverscom_api_ratelimit_reserve
