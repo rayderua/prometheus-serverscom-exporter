@@ -293,18 +293,19 @@
             },
             "spec": {
               "qryType": 3,
-              "query": "query_result(count by (host_id, title) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\"} unless on (host_id) serverscom_host_labels{label_$label!~\"$label_value\"}))",
+              "query": "query_result(count by (host_id, title) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\"} unless on (host_id) (serverscom_host_labels unless serverscom_host_labels{label_$label=~\"$label_value\"})))",
               "refId": "PrometheusVariableQueryEditor-VariableQuery"
             }
           },
-          "definition": "query_result(count by (host_id, title) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\"} unless on (host_id) serverscom_host_labels{label_$label!~\"$label_value\"}))",
+          "definition": "query_result(count by (host_id, title) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\"} unless on (host_id) (serverscom_host_labels unless serverscom_host_labels{label_$label=~\"$label_value\"})))",
           "regex": "/host_id=\"(?<value>[^\"]+)\".*title=\"(?<text>[^\"]+)\"/",
           "sort": "alphabeticalAsc",
           "options": [],
           "multi": true,
           "includeAll": true,
           "allowCustomValue": false,
-          "description": "Servers by current name, filtered by location, rack and label; selected by host_id, so a renamed server stays selected. All means all servers that pass the filters."
+          "description": "Servers by current name, filtered by location, rack and label; selected by host_id, so a renamed server stays selected. All means all servers that pass the filters.",
+          "allValue": ".*"
         }
       },
       {
@@ -366,7 +367,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) or vector(0)",
+                        "expr": "count((serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -445,7 +446,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) or vector(0)",
+                        "expr": "count((serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -528,7 +529,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"}) or vector(0)",
+                        "expr": "count((serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -611,7 +612,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) or vector(0)",
+                        "expr": "count((serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -694,7 +695,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0 and serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 1) or vector(0)",
+                        "expr": "count((serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0 and (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -1470,7 +1471,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sort_desc(count by (location, rack) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}))",
+                        "expr": "sort_desc(count by (location, rack) ((serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{rack}}"
@@ -1560,7 +1561,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, title, location, rack, configuration, private_ipv4, public_ipv4, oob_ipv4) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) and on (host_id) (max by (host_id, title) ( label_replace(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} * 0, \"check\", \"base\", \"\", \"\") or label_replace(1 * (count by (host_id, title) (serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) > bool 0), \"check\", \"feeds\", \"\", \"\") or label_replace(1 * (count by (host_id, title) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 1 and serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) > bool 0), \"check\", \"uplinks\", \"\", \"\") or label_replace(2 * (count by (host_id, title) (serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"}) > bool 0), \"check\", \"operational\", \"\", \"\") or label_replace(3 * (1 - serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}), \"check\", \"power\", \"\", \"\") ) >= $show)",
+                        "expr": "max by (host_id, title, location, rack, configuration, private_ipv4, public_ipv4, oob_ipv4) ((serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) and on (host_id) (max by (host_id, title) ( label_replace((serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) * 0, \"check\", \"base\", \"\", \"\") or label_replace(1 * (count by (host_id, title) ((serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) > bool 0), \"check\", \"feeds\", \"\", \"\") or label_replace(1 * (count by (host_id, title) ((serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1 and (serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) > bool 0), \"check\", \"uplinks\", \"\", \"\") or label_replace(2 * (count by (host_id, title) ((serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) > bool 0), \"check\", \"operational\", \"\", \"\") or label_replace(3 * (1 - (serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})), \"check\", \"power\", \"\", \"\") ) >= $show)",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1581,7 +1582,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id) (max by (host_id, title) ( label_replace(serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} * 0, \"check\", \"base\", \"\", \"\") or label_replace(1 * (count by (host_id, title) (serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) > bool 0), \"check\", \"feeds\", \"\", \"\") or label_replace(1 * (count by (host_id, title) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 1 and serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) > bool 0), \"check\", \"uplinks\", \"\", \"\") or label_replace(2 * (count by (host_id, title) (serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"}) > bool 0), \"check\", \"operational\", \"\", \"\") or label_replace(3 * (1 - serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}), \"check\", \"power\", \"\", \"\") ))",
+                        "expr": "max by (host_id) (max by (host_id, title) ( label_replace((serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) * 0, \"check\", \"base\", \"\", \"\") or label_replace(1 * (count by (host_id, title) ((serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) > bool 0), \"check\", \"feeds\", \"\", \"\") or label_replace(1 * (count by (host_id, title) ((serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1 and (serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) > bool 0), \"check\", \"uplinks\", \"\", \"\") or label_replace(2 * (count by (host_id, title) ((serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) > bool 0), \"check\", \"operational\", \"\", \"\") or label_replace(3 * (1 - (serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})), \"check\", \"power\", \"\", \"\") ))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1602,7 +1603,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, server_model, operating_system) (serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "max by (host_id, server_model, operating_system) ((serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1623,7 +1624,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"public\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"public\"})",
+                        "expr": "max by (host_id) ((serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"public\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) + (serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"public\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1644,7 +1645,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"private\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"private\"})",
+                        "expr": "max by (host_id) ((serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"private\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) + (serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", uplink=\"private\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1665,7 +1666,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id) (serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"})",
+                        "expr": "max by (host_id) ((serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -1686,7 +1687,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (host_id) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "sum by (host_id) ((serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2189,7 +2190,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_host_power_feed_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}",
+                        "expr": "(serverscom_host_power_feed_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2318,14 +2319,29 @@
                                 "index": 1
                               }
                             }
+                          },
+                          {
+                            "type": "regex",
+                            "options": {
+                              "pattern": ".+",
+                              "result": {
+                                "color": "orange",
+                                "index": 2
+                              }
+                            }
                           }
                         ]
                       },
                       {
                         "id": "custom.cellOptions",
                         "value": {
-                          "type": "color-text"
+                          "type": "color-background",
+                          "mode": "basic"
                         }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
                       }
                     ]
                   }
@@ -2357,7 +2373,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, title, location, rack, oob_ipv4) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "max by (host_id, title, location, rack, oob_ipv4) ((serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2378,7 +2394,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, oob_status) (label_replace(serverscom_host_feature_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"}, \"oob_status\", \"$1\", \"status\", \"(.*)\"))",
+                        "expr": "max by (host_id, oob_status) (label_replace((serverscom_host_feature_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}), \"oob_status\", \"$1\", \"status\", \"(.*)\"))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2483,7 +2499,57 @@
                     ]
                   }
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "oob_public_access"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "deactivated": {
+                                "text": "deactivated",
+                                "color": "green",
+                                "index": 0
+                              },
+                              "activated": {
+                                "text": "activated",
+                                "color": "red",
+                                "index": 1
+                              }
+                            }
+                          },
+                          {
+                            "type": "regex",
+                            "options": {
+                              "pattern": ".+",
+                              "result": {
+                                "color": "orange",
+                                "index": 2
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-background",
+                          "mode": "basic"
+                        }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -2511,7 +2577,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_host_uplink_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} * on (host_id, uplink) group_left () (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} + serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "(serverscom_host_uplink_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) * on (host_id, uplink) group_left () ((serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) + (serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2623,6 +2689,78 @@
                   {
                     "matcher": {
                       "id": "byName",
+                      "options": "Server"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.minWidth",
+                        "value": 180
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Location"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Rack"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 110
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Uplink"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 80
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Model"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 140
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Speed"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 80
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
                       "options": "State"
                     },
                     "properties": [
@@ -2633,17 +2771,17 @@
                             "type": "value",
                             "options": {
                               "0": {
-                                "text": "single link",
-                                "color": "text",
+                                "text": "SGL",
+                                "color": "white",
                                 "index": 0
                               },
                               "1": {
-                                "text": "disaggregated",
+                                "text": "SPL",
                                 "color": "orange",
                                 "index": 1
                               },
                               "2": {
-                                "text": "aggregated",
+                                "text": "LAG",
                                 "color": "green",
                                 "index": 2
                               }
@@ -2654,8 +2792,21 @@
                       {
                         "id": "custom.cellOptions",
                         "value": {
-                          "type": "color-text"
+                          "type": "color-background",
+                          "mode": "basic"
                         }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 70
+                      },
+                      {
+                        "id": "description",
+                        "value": "LAG: redundant uplink, ports aggregated. SPL: redundant uplink split with the disaggregated ports feature. SGL: single link."
                       }
                     ]
                   }
@@ -2687,7 +2838,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}",
+                        "expr": "(serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -2802,163 +2953,75 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "Status"
+                      "options": "Server"
                     },
                     "properties": [
                       {
-                        "id": "mappings",
-                        "value": [
-                          {
-                            "type": "value",
-                            "options": {
-                              "active": {
-                                "text": "active",
-                                "color": "green",
-                                "index": 0
-                              }
-                            }
-                          }
-                        ]
-                      },
-                      {
-                        "id": "custom.cellOptions",
-                        "value": {
-                          "type": "color-text"
-                        }
+                        "id": "custom.minWidth",
+                        "value": 180
                       }
                     ]
-                  }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "table_l2_segments": {
-        "kind": "Panel",
-        "spec": {
-          "id": 25,
-          "title": "L2 segments",
-          "description": "Segments with at least one member among the selected servers.",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "${datasource}"
-                      },
-                      "spec": {
-                        "expr": "serverscom_l2_segment_info * on (segment_id) group_left () count by (segment_id) (serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
-                        "instant": true,
-                        "range": false,
-                        "format": "table"
-                      }
-                    },
-                    "refId": "A",
-                    "hidden": false
-                  }
-                }
-              ],
-              "transformations": [
-                {
-                  "kind": "Transformation",
-                  "group": "filterFieldsByName",
-                  "spec": {
-                    "options": {
-                      "include": {
-                        "names": [
-                          "Value",
-                          "host_id",
-                          "location_group",
-                          "segment",
-                          "status",
-                          "type"
-                        ]
-                      }
-                    }
-                  }
-                },
-                {
-                  "kind": "Transformation",
-                  "group": "organize",
-                  "spec": {
-                    "options": {
-                      "excludeByName": {
-                        "segment_id": true,
-                        "job": true,
-                        "instance": true
-                      },
-                      "renameByName": {
-                        "segment": "Segment",
-                        "type": "Type",
-                        "status": "Status",
-                        "location_group": "Location group",
-                        "Value": "Members"
-                      },
-                      "indexByName": {
-                        "segment": 0,
-                        "type": 1,
-                        "location_group": 2,
-                        "status": 3,
-                        "Value": 4
-                      }
-                    }
-                  }
-                }
-              ],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "table",
-            "version": "",
-            "spec": {
-              "options": {
-                "showHeader": true,
-                "cellHeight": "sm",
-                "footer": {
-                  "show": false,
-                  "reducer": [
-                    "sum"
-                  ],
-                  "fields": ""
-                },
-                "sortBy": [
-                  {
-                    "displayName": "Segment",
-                    "desc": false
-                  }
-                ]
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "custom": {
-                    "align": "auto",
-                    "filterable": true,
-                    "cellOptions": {
-                      "type": "auto"
-                    }
                   },
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Segment"
+                    },
+                    "properties": [
                       {
-                        "value": null,
-                        "color": "text"
+                        "id": "custom.width",
+                        "value": 120
                       }
                     ]
-                  }
-                },
-                "overrides": [
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Location"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Rack"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 110
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Mode"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 80
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "VLAN"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 70
+                      }
+                    ]
+                  },
                   {
                     "matcher": {
                       "id": "byName",
@@ -2977,13 +3040,151 @@
                                 "index": 0
                               }
                             }
+                          },
+                          {
+                            "type": "regex",
+                            "options": {
+                              "pattern": ".+",
+                              "result": {
+                                "color": "orange",
+                                "index": 1
+                              }
+                            }
                           }
                         ]
                       },
                       {
                         "id": "custom.cellOptions",
                         "value": {
-                          "type": "color-text"
+                          "type": "color-background",
+                          "mode": "basic"
+                        }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "table_l2_segments": {
+        "kind": "Panel",
+        "spec": {
+          "id": 25,
+          "title": "L2 segments",
+          "description": "One tile per L2 segment with at least one member among the selected servers: the number of those members. Orange: the segment is not active.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (segment) (serverscom_l2_segment_info{status=\"active\"} * on (segment_id) group_left () count by (segment_id) ((serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})))",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series",
+                        "legendFormat": "{{segment}}"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "${datasource}"
+                      },
+                      "spec": {
+                        "expr": "max by (segment) (serverscom_l2_segment_info{status!=\"active\"} * on (segment_id) group_left () count by (segment_id) ((serverscom_l2_segment_member_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})))",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series",
+                        "legendFormat": "{{segment}}"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "",
+            "spec": {
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "textMode": "value_and_name",
+                "justifyMode": "center",
+                "orientation": "vertical",
+                "wideLayout": true,
+                "showPercentChange": false
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "blue"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "thresholds"
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "B"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "orange"
                         }
                       }
                     ]
@@ -3016,7 +3217,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_host_network_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}",
+                        "expr": "(serverscom_host_network_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -3136,7 +3337,164 @@
                     ]
                   }
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Server"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.minWidth",
+                        "value": 180
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Location"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Rack"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 110
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Network"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 140
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Interface"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Family"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 70
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "CIDR"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 170
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Distribution"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 110
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Additional"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 100
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Status"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "active": {
+                                "text": "active",
+                                "color": "green",
+                                "index": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "regex",
+                            "options": {
+                              "pattern": ".+",
+                              "result": {
+                                "color": "orange",
+                                "index": 1
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-background",
+                          "mode": "basic"
+                        }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -3164,7 +3522,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "(serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} * on (host_id, position) group_left () serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) or (serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", populated=\"false\"} * 0)",
+                        "expr": "((serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) * on (host_id, position) group_left () (serverscom_host_drive_capacity{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) or ((serverscom_host_drive_slot_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", populated=\"false\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) * 0)",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -3285,6 +3643,114 @@
                   {
                     "matcher": {
                       "id": "byName",
+                      "options": "Server"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.minWidth",
+                        "value": 180
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Location"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Rack"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 110
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Slot"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 60
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Drive model"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 160
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Interface"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 100
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Form factor"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 100
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Capacity"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 100
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Capacity"
+                    },
+                    "properties": [
+                      {
+                        "id": "description",
+                        "value": "drive_model.capacity as reported by the API (most likely GB); 0 for empty slots."
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
                       "options": "Populated"
                     },
                     "properties": [
@@ -3301,7 +3767,7 @@
                               },
                               "false": {
                                 "text": "empty",
-                                "color": "text",
+                                "color": "#5a5f66",
                                 "index": 1
                               }
                             }
@@ -3311,20 +3777,66 @@
                       {
                         "id": "custom.cellOptions",
                         "value": {
-                          "type": "color-text"
+                          "type": "color-background",
+                          "mode": "basic"
                         }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 100
                       }
                     ]
                   },
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "Capacity"
+                      "options": "Media"
                     },
                     "properties": [
                       {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "HDD": {
+                                "color": "#6e7f91",
+                                "index": 0
+                              },
+                              "SSD": {
+                                "color": "blue",
+                                "index": 1
+                              },
+                              "NVMe": {
+                                "color": "purple",
+                                "index": 2
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
                         "id": "description",
-                        "value": "drive_model.capacity as reported by the API (most likely GB); 0 for empty slots."
+                        "value": "HDD: spinning disk; SSD: SATA/SAS solid state; NVMe: PCIe solid state."
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-background",
+                          "mode": "basic"
+                        }
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 100
                       }
                     ]
                   }
@@ -4985,7 +5497,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (currency) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "sum by (currency) ((serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{currency}}"
@@ -5187,7 +5699,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sort_desc(count by (server_model) (serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}))",
+                        "expr": "sort_desc(count by (server_model) ((serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{server_model}}"
@@ -5277,7 +5789,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (currency) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "sum by (currency) ((serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{currency}}"
@@ -5368,207 +5880,6 @@
                     ]
                   }
                 ]
-              }
-            }
-          }
-        }
-      },
-      "stat_cost_avg": {
-        "kind": "Panel",
-        "spec": {
-          "id": 47,
-          "title": "Average per server",
-          "description": "Total divided by the number of selected servers that have services.",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "${datasource}"
-                      },
-                      "spec": {
-                        "expr": "sum by (currency) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) / count by (currency) (count by (host_id, currency) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}))",
-                        "instant": true,
-                        "range": false,
-                        "legendFormat": "{{currency}}"
-                      }
-                    },
-                    "refId": "A",
-                    "hidden": false
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "stat",
-            "version": "",
-            "spec": {
-              "options": {
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "colorMode": "none",
-                "graphMode": "none",
-                "textMode": "value",
-                "justifyMode": "center",
-                "orientation": "auto",
-                "wideLayout": true,
-                "showPercentChange": false
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "none",
-                  "decimals": 2,
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "value": null,
-                        "color": "text"
-                      }
-                    ]
-                  },
-                  "color": {
-                    "mode": "thresholds"
-                  },
-                  "noValue": "–"
-                },
-                "overrides": [
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "USD"
-                    },
-                    "properties": [
-                      {
-                        "id": "unit",
-                        "value": "currencyUSD"
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "EUR"
-                    },
-                    "properties": [
-                      {
-                        "id": "unit",
-                        "value": "currencyEUR"
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "GBP"
-                    },
-                    "properties": [
-                      {
-                        "id": "unit",
-                        "value": "currencyGBP"
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "stat_cost_max": {
-        "kind": "Panel",
-        "spec": {
-          "id": 48,
-          "title": "Most expensive server",
-          "description": "The selected server with the highest total in the current billing period.",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "${datasource}"
-                      },
-                      "spec": {
-                        "expr": "topk(1, sum by (title, currency) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}))",
-                        "instant": true,
-                        "range": false,
-                        "legendFormat": "{{title}}"
-                      }
-                    },
-                    "refId": "A",
-                    "hidden": false
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "stat",
-            "version": "",
-            "spec": {
-              "options": {
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "colorMode": "none",
-                "graphMode": "none",
-                "textMode": "value_and_name",
-                "justifyMode": "center",
-                "orientation": "auto",
-                "wideLayout": true,
-                "showPercentChange": false
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "none",
-                  "decimals": 2,
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "value": null,
-                        "color": "text"
-                      }
-                    ]
-                  },
-                  "color": {
-                    "mode": "thresholds"
-                  },
-                  "noValue": "–"
-                },
-                "overrides": []
               }
             }
           }
@@ -5596,7 +5907,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} unless on (host_id) serverscom_host_service_price) or vector(0)",
+                        "expr": "count((serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) unless on (host_id) serverscom_host_service_price) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -5653,97 +5964,6 @@
           }
         }
       },
-      "bars_cost_rack": {
-        "kind": "Panel",
-        "spec": {
-          "id": 50,
-          "title": "By rack, $currency",
-          "description": "Total of the current billing period by rack.",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "${datasource}"
-                      },
-                      "spec": {
-                        "expr": "sort_desc(sum by (rack) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}))",
-                        "instant": true,
-                        "range": false,
-                        "legendFormat": "{{rack}}"
-                      }
-                    },
-                    "refId": "A",
-                    "hidden": false
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "bargauge",
-            "version": "",
-            "spec": {
-              "options": {
-                "orientation": "horizontal",
-                "displayMode": "basic",
-                "valueMode": "text",
-                "namePlacement": "left",
-                "showUnfilled": true,
-                "sizing": "manual",
-                "minVizHeight": 16,
-                "maxVizHeight": 22,
-                "minVizWidth": 8,
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "legend": {
-                  "showLegend": false,
-                  "displayMode": "list",
-                  "placement": "bottom",
-                  "calcs": []
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "none",
-                  "min": 0,
-                  "color": {
-                    "mode": "fixed",
-                    "fixedColor": "blue"
-                  },
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "value": null,
-                        "color": "blue"
-                      }
-                    ]
-                  },
-                  "decimals": 0
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
       "bars_cost_model": {
         "kind": "Panel",
         "spec": {
@@ -5766,7 +5986,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sort_desc(sum by (server_model) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} * on (host_id) group_left (server_model) max by (host_id, server_model) (serverscom_host_configuration_info)))",
+                        "expr": "sort_desc(sum by (server_model) ((serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) * on (host_id) group_left (server_model) max by (host_id, server_model) (serverscom_host_configuration_info)))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{server_model}}"
@@ -5857,7 +6077,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sort_desc(sum by (type) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}))",
+                        "expr": "sort_desc(sum by (type) ((serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{type}}"
@@ -5948,7 +6168,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, title, location, rack) (serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "max by (host_id, title, location, rack) ((serverscom_host_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -5969,7 +6189,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, server_model) (serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "max by (host_id, server_model) ((serverscom_host_configuration_info{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -5990,7 +6210,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (host_id, currency) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "sum by (host_id, currency) ((serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -6011,7 +6231,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (host_id) (serverscom_host_service_subtotal{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "sum by (host_id) ((serverscom_host_service_subtotal{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -6032,7 +6252,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (host_id) (serverscom_host_service_tax{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "sum by (host_id) ((serverscom_host_service_tax{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -6072,7 +6292,10 @@
                     "options": {
                       "excludeByName": {
                         "Value #A": true,
-                        "Value #B": true
+                        "Value #B": true,
+                        "rack": true,
+                        "Value #D": true,
+                        "Value #E": true
                       },
                       "renameByName": {
                         "title": "Server",
@@ -6214,6 +6437,18 @@
                         ]
                       }
                     ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "ID"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hidden",
+                        "value": true
+                      }
+                    ]
                   }
                 ]
               }
@@ -6243,7 +6478,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}",
+                        "expr": "(serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -6283,7 +6518,8 @@
                       "excludeByName": {
                         "__name__": true,
                         "job": true,
-                        "instance": true
+                        "instance": true,
+                        "rack": true
                       },
                       "renameByName": {
                         "title": "Server",
@@ -6424,7 +6660,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sum by (currency) (serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"})",
+                        "expr": "sum by (currency) ((serverscom_host_service_price{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}))",
                         "instant": false,
                         "range": true,
                         "legendFormat": "{{currency}}"
@@ -6788,7 +7024,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"} == 1) or vector(0)",
+                        "expr": "count((serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -6871,7 +7107,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_scheduled_release_timestamp_seconds{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) or vector(0)",
+                        "expr": "count((serverscom_host_scheduled_release_timestamp_seconds{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -6954,7 +7190,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "count(serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"host_rescue_mode\"} == 1) or vector(0)",
+                        "expr": "count((serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"host_rescue_mode\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1) or vector(0)",
                         "instant": true,
                         "range": false
                       }
@@ -7037,7 +7273,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "max by (host_id, title, location, rack, issue) (\n  label_replace((serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) * 0 + 3, \"issue\", \"powered off\", \"\", \"\")\n  or label_replace((serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"}) * 0 + 2, \"issue\", \"operational status: $1\", \"status\", \"(.*)\")\n  or label_replace((serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"} == 1) * 0 + 2, \"issue\", \"OOB reachable from the internet\", \"\", \"\")\n  or label_replace((serverscom_host_scheduled_release_timestamp_seconds{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}) * 0 + 2, \"issue\", \"release scheduled\", \"\", \"\")\n  or label_replace((serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0) * 0 + 1, \"issue\", \"power feed $1 down\", \"feed\", \"(.*)\")\n  or label_replace((serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 0 and on (host_id, uplink) serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} == 1) * 0 + 1, \"issue\", \"$1 bonding split\", \"uplink\", \"(.*)\")\n  or label_replace((serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"host_rescue_mode\"} == 1) * 0 + 1, \"issue\", \"rescue mode\", \"\", \"\")\n)",
+                        "expr": "max by (host_id, title, location, rack, issue) (\n  label_replace(((serverscom_host_powered_on{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) * 0 + 3, \"issue\", \"powered off\", \"\", \"\")\n  or label_replace(((serverscom_host_operational_status{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", status!=\"normal\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) * 0 + 2, \"issue\", \"operational status: $1\", \"status\", \"(.*)\")\n  or label_replace(((serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"oob_public_access\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1) * 0 + 2, \"issue\", \"OOB reachable from the internet\", \"\", \"\")\n  or label_replace(((serverscom_host_scheduled_release_timestamp_seconds{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})) * 0 + 2, \"issue\", \"release scheduled\", \"\", \"\")\n  or label_replace(((serverscom_host_power_feed_up{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0) * 0 + 1, \"issue\", \"power feed $1 down\", \"feed\", \"(.*)\")\n  or label_replace(((serverscom_host_uplink_aggregated{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 0 and on (host_id, uplink) (serverscom_host_uplink_redundant{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1) * 0 + 1, \"issue\", \"$1 bonding split\", \"uplink\", \"(.*)\")\n  or label_replace(((serverscom_host_feature_enabled{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\", feature=\"host_rescue_mode\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"}) == 1) * 0 + 1, \"issue\", \"rescue mode\", \"\", \"\")\n)",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -7235,7 +7471,7 @@
                         "name": "${datasource}"
                       },
                       "spec": {
-                        "expr": "sort_desc(label_replace(count by (label_$label) (serverscom_host_labels{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"}), \"label_$label\", \"(none)\", \"label_$label\", \"\"))",
+                        "expr": "sort_desc(label_replace(count by (label_$label) ((serverscom_host_labels{location=~\"$location\", rack=~\"$rack\", host_id=~\"$server\"} and on (host_id) serverscom_host_labels{label_$label=~\"$label_value\"})), \"label_$label\", \"(none)\", \"label_$label\", \"\"))",
                         "instant": true,
                         "range": false,
                         "legendFormat": "{{label_$label}}"
@@ -7561,8 +7797,8 @@
                       "spec": {
                         "x": 0,
                         "y": 0,
-                        "width": 6,
-                        "height": 4,
+                        "width": 4,
+                        "height": 5,
                         "element": {
                           "kind": "ElementReference",
                           "name": "stat_cost_total"
@@ -7572,34 +7808,8 @@
                     {
                       "kind": "GridLayoutItem",
                       "spec": {
-                        "x": 6,
-                        "y": 0,
-                        "width": 6,
-                        "height": 4,
-                        "element": {
-                          "kind": "ElementReference",
-                          "name": "stat_cost_avg"
-                        }
-                      }
-                    },
-                    {
-                      "kind": "GridLayoutItem",
-                      "spec": {
-                        "x": 12,
-                        "y": 0,
-                        "width": 8,
-                        "height": 4,
-                        "element": {
-                          "kind": "ElementReference",
-                          "name": "stat_cost_max"
-                        }
-                      }
-                    },
-                    {
-                      "kind": "GridLayoutItem",
-                      "spec": {
-                        "x": 20,
-                        "y": 0,
+                        "x": 0,
+                        "y": 5,
                         "width": 4,
                         "height": 4,
                         "element": {
@@ -7611,22 +7821,9 @@
                     {
                       "kind": "GridLayoutItem",
                       "spec": {
-                        "x": 0,
-                        "y": 4,
-                        "width": 8,
-                        "height": 9,
-                        "element": {
-                          "kind": "ElementReference",
-                          "name": "bars_cost_rack"
-                        }
-                      }
-                    },
-                    {
-                      "kind": "GridLayoutItem",
-                      "spec": {
-                        "x": 8,
-                        "y": 4,
-                        "width": 8,
+                        "x": 12,
+                        "y": 0,
+                        "width": 6,
                         "height": 9,
                         "element": {
                           "kind": "ElementReference",
@@ -7637,9 +7834,9 @@
                     {
                       "kind": "GridLayoutItem",
                       "spec": {
-                        "x": 16,
-                        "y": 4,
-                        "width": 8,
+                        "x": 18,
+                        "y": 0,
+                        "width": 6,
                         "height": 9,
                         "element": {
                           "kind": "ElementReference",
@@ -7651,7 +7848,7 @@
                       "kind": "GridLayoutItem",
                       "spec": {
                         "x": 0,
-                        "y": 13,
+                        "y": 9,
                         "width": 24,
                         "height": 13,
                         "element": {
@@ -7664,8 +7861,8 @@
                       "kind": "GridLayoutItem",
                       "spec": {
                         "x": 0,
-                        "y": 26,
-                        "width": 14,
+                        "y": 22,
+                        "width": 24,
                         "height": 11,
                         "element": {
                           "kind": "ElementReference",
@@ -7676,10 +7873,10 @@
                     {
                       "kind": "GridLayoutItem",
                       "spec": {
-                        "x": 14,
-                        "y": 26,
-                        "width": 10,
-                        "height": 11,
+                        "x": 4,
+                        "y": 0,
+                        "width": 8,
+                        "height": 9,
                         "element": {
                           "kind": "ElementReference",
                           "name": "ts_cost"
@@ -7742,7 +7939,7 @@
                       "kind": "GridLayoutItem",
                       "spec": {
                         "x": 0,
-                        "y": 0,
+                        "y": 4,
                         "width": 12,
                         "height": 11,
                         "element": {
@@ -7755,7 +7952,7 @@
                       "kind": "GridLayoutItem",
                       "spec": {
                         "x": 12,
-                        "y": 0,
+                        "y": 4,
                         "width": 12,
                         "height": 11,
                         "element": {
@@ -7768,9 +7965,9 @@
                       "kind": "GridLayoutItem",
                       "spec": {
                         "x": 0,
-                        "y": 11,
-                        "width": 12,
-                        "height": 10,
+                        "y": 0,
+                        "width": 24,
+                        "height": 4,
                         "element": {
                           "kind": "ElementReference",
                           "name": "table_l2_segments"
@@ -7780,10 +7977,10 @@
                     {
                       "kind": "GridLayoutItem",
                       "spec": {
-                        "x": 12,
-                        "y": 11,
-                        "width": 12,
-                        "height": 10,
+                        "x": 0,
+                        "y": 15,
+                        "width": 24,
+                        "height": 11,
                         "element": {
                           "kind": "ElementReference",
                           "name": "table_networks"
