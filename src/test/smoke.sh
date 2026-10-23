@@ -267,7 +267,10 @@ start_exporter
 wait_for "/-/healthy after restart" curl -sf "http://$EXPORTER_ADDR/-/healthy"
 wait_for "cached data in /metrics" all_data_loaded
 check_inventory
-exporter_logs | grep -q 'Loaded cache file' || fail "cache file was not loaded"
+# Via a file, not a pipe: with pipefail, "grep -q" exiting early makes
+# docker logs fail with SIGPIPE.
+exporter_logs > "$workdir/exporter-logs.txt"
+grep -q 'Loaded cache file' "$workdir/exporter-logs.txt" || fail "cache file was not loaded"
 pass "cache file loaded"
 
 echo "== restart with collectors disabled and a fixed interval"
