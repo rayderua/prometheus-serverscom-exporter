@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke and regression test of the exporter against the mock API (test/mockapi):
 #   0. optional, with PREVIOUS: the previous release fills the cache file, and
-#      the new version must expose the same inventory after the upgrade;
+#      the new version must still expose every inventory series of the
+#      previous one, with the same value (new series are allowed);
 #   1. the exporter fetches everything and exposes the expected metrics; the
 #      set of series must match test/golden/metrics-shape.txt;
 #   2. after a restart with the API down, it serves the same data from the
@@ -237,9 +238,12 @@ expect "configured intervals fit" '^serverscom_exporter_refresh_interval_stretch
 expect_none "no refresh errors" '^serverscom_exporter_refresh_errors_total\{.*\} [1-9]'
 
 if [[ -n "$PREVIOUS" ]]; then
-  diff "$workdir/inventory.previous" <(inventory "$workdir/metrics.txt") \
-    || fail "inventory differs from the previous release (lines above: < previous, > new)"
-  pass "same inventory as the previous release after the upgrade"
+  lost=$(comm -23 "$workdir/inventory.previous" <(inventory "$workdir/metrics.txt"))
+  if [[ -n "$lost" ]]; then
+    echo "$lost"
+    fail "series of the previous release above are missing or changed after the upgrade"
+  fi
+  pass "every inventory series of the previous release is kept after the upgrade"
 fi
 
 wait_for "every refresh loop to run once" all_loops_done
