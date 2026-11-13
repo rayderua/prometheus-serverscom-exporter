@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = configure ]; then
+	adduser --quiet --system --group --home /var/lib/prometheus --no-create-home \
+		--gecos "Prometheus daemon" prometheus
+	install -d -o prometheus -g prometheus /var/lib/prometheus-serverscom-exporter
+	install -d -m 0750 -g prometheus /etc/prometheus-serverscom-exporter
+fi
+
+#DEBHELPER#

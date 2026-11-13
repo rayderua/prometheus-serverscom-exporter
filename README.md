@@ -36,6 +36,7 @@ that Terraform, the CLI and other users of the account are not starved.
 | [`src/`](src/README.md) | The exporter (Go), its Dockerfile and the full metric reference |
 | [`charts/serverscom-exporter/`](charts/serverscom-exporter/README.md) | Helm chart: Deployment, cache PVC, ServiceMonitor, PrometheusRule, NetworkPolicy |
 | [`grafana/`](grafana/README.md) | Grafana dashboard (v2 resource with tabs) and alert rules |
+| [`debian/`](debian) | Debian packaging (dh-golang) |
 | [`demo/`](demo/docker-compose.yml) | Docker Compose demo: mock API, exporter, Prometheus, Grafana |
 | [`.github/workflows/`](.github/workflows) | CI and release workflows |
 
@@ -181,6 +182,30 @@ SERVERSCOM_API_TOKEN=... ./serverscom-exporter-$v.linux-amd64/serverscom-exporte
 
 Binaries of dev builds are artifacts of the *Dev build* workflow runs, see
 [Dev builds](#dev-builds).
+
+### Debian package
+
+Releases also have `.deb` packages for amd64 and arm64 with a systemd service
+running as the `prometheus` user:
+
+```sh
+v=X.Y.Z
+curl -sSfLO https://github.com/rayderua/prometheus-serverscom-exporter/releases/download/v$v/prometheus-serverscom-exporter_$v-1_amd64.deb
+sudo apt install ./prometheus-serverscom-exporter_$v-1_amd64.deb
+# the API token, readable by the prometheus user
+sudo install -m 0640 -g prometheus /dev/stdin /etc/prometheus-serverscom-exporter/token <<< "$TOKEN"
+sudo systemctl restart prometheus-serverscom-exporter
+```
+
+Flags go into `ARGS` in `/etc/default/prometheus-serverscom-exporter`; the
+cache file is in `/var/lib/prometheus-serverscom-exporter`.
+
+To build the package (Go and the modules are downloaded during the build):
+
+```sh
+mk-build-deps -i -t "apt-get -y --no-install-recommends" -r debian/control
+dpkg-buildpackage -rfakeroot -D -us -uc -b
+```
 
 ### From source
 
@@ -718,7 +743,7 @@ GitHub Actions ([`.github/workflows`](.github/workflows)):
 
 | Tag | Releases | Version |
 |-----|----------|---------|
-| `vX.Y.Z`, `vX.Y.Z-rc.N` | image `ghcr.io/rayderua/prometheus-serverscom-exporter` (`X.Y.Z`, `X.Y`, `latest`; pre-releases only their own tag), linux/amd64 and linux/arm64; binaries for linux and darwin, amd64 and arm64, attached to the GitHub release | from the tag |
+| `vX.Y.Z`, `vX.Y.Z-rc.N` | image `ghcr.io/rayderua/prometheus-serverscom-exporter` (`X.Y.Z`, `X.Y`, `latest`; pre-releases only their own tag), linux/amd64 and linux/arm64; binaries for linux and darwin, amd64 and arm64, and Debian packages for amd64 and arm64, attached to the GitHub release | from the tag |
 | `chart-X.Y.Z` | chart `oci://ghcr.io/rayderua/charts/serverscom-exporter` and the Helm repository `https://rayderua.github.io/prometheus-serverscom-exporter` | `version` in `Chart.yaml`, must match the tag |
 
 Each tag also creates a GitHub release; only image releases are marked

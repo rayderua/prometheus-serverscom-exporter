@@ -1,0 +1,13 @@
+[Unit]
+Description=Prometheus exporter for the Servers.com API
+Documentation=https://github.com/rayderua/prometheus-serverscom-exporter
+
+[Service]
+Restart=on-failure
+User=prometheus
+EnvironmentFile=/etc/default/prometheus-serverscom-exporter
+ExecStart=/usr/bin/prometheus-serverscom-exporter $ARGS
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

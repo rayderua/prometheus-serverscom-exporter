@@ -1,0 +1,6 @@
+# Set the command-line arguments to pass to the server.
+# See: prometheus-serverscom-exporter --help
+ARGS="--cache.file=/var/lib/prometheus-serverscom-exporter/cache.json"
+
+# File with the Servers.com API token (root:prometheus, 0640).
+SERVERSCOM_API_TOKEN_FILE=/etc/prometheus-serverscom-exporter/token

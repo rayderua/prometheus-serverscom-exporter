@@ -1,0 +1,14 @@
+Source: prometheus-serverscom-exporter
+Section: net
+Priority: optional
+Maintainer: Oleksii Opaliev <rayder.ua@gmail.com>
+Build-Depends: debhelper-compat (= 13), dh-golang, golang-any, ca-certificates
+Standards-Version: 4.7.0
+Homepage: https://github.com/rayderua/prometheus-serverscom-exporter
+Rules-Requires-Root: no
+XS-Go-Import-Path: github.com/rayderua/prometheus-serverscom-exporter
+
+Package: prometheus-serverscom-exporter
+Architecture: any
+Depends: adduser, ${misc:Depends}
+Description: Prometheus exporter for the Servers.com API

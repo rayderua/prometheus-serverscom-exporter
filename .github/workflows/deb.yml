@@ -1,0 +1,42 @@
+name: Debian package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Upstream version for debian/changelog; empty keeps it.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: Debian package (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends devscripts equivs
+          if [ -n "$VERSION" ]; then
+            dch -M -b -v "$(echo "$VERSION" | tr - '~')-1" -D unstable "Release $VERSION."
+          fi
+          mk-build-deps -i -t "apt-get -y --no-install-recommends" -r debian/control
+          dpkg-buildpackage -rfakeroot -D -us -uc -b
+          mkdir out && mv ../*.deb out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: out/*.deb
+          retention-days: 1

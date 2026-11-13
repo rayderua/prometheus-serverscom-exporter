@@ -1,8 +1,8 @@
 name: Release image
 
 # Image releases are made from tags vX.Y.Z (or vX.Y.Z-rc.N) on commits of the
-# main branch: the multi-arch image, and binaries attached to the GitHub
-# release. Charts are released separately, see release-chart.yml.
+# main branch: the multi-arch image, and binaries and Debian packages attached
+# to the GitHub release. Charts are released separately, see release-chart.yml.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -148,9 +148,16 @@ jobs:
           path: src/dist/
           retention-days: 1
 
+  deb:
+    name: Debian package
+    needs: [check, test]
+    uses: ./.github/workflows/deb.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+
   release:
     name: GitHub release
-    needs: [check, image, binaries]
+    needs: [check, image, binaries, deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -165,6 +172,11 @@ jobs:
         with:
           name: binaries
           path: dist
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: deb-*
+          path: dist
+          merge-multiple: true
       - name: Create release
         run: |
           flags=(--title "$GITHUB_REF_NAME" --generate-notes --notes-file notes.md)
@@ -177,6 +189,7 @@ jobs:
           if prev=$(git describe --tags --match 'v[0-9]*' --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null); then
             flags+=(--notes-start-tag "$prev")
           fi
-          printf 'Image: `%s:%s`\n\nBinaries for linux and darwin (amd64, arm64) are attached, checksums in `sha256sums.txt`.\n' \
+          (cd dist && sha256sum -- *.deb >> sha256sums.txt)
+          printf 'Image: `%s:%s`\n\nBinaries for linux and darwin and Debian packages (amd64, arm64) are attached, checksums in `sha256sums.txt`.\n' \
             "$IMAGE" "$VERSION" > notes.md
           gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}"
