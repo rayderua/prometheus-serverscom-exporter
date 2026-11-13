@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+include /usr/share/dpkg/pkg-info.mk
+
+BUILDDIR := build
+# go.mod needs a newer Go than Debian ships: the go command fetches it, and
+# the modules come from the module proxy.
+export GOTOOLCHAIN := auto
+export CGO_ENABLED := 0
+export DH_GOLANG_INSTALL_EXTRA := src/go.mod src/go.sum
+
+V := github.com/prometheus/common/version
+BUILDDATE := $(shell date --utc --date="@$(SOURCE_DATE_EPOCH)" +%Y%m%d-%H:%M:%S)
+BUILDFLAGS := -trimpath -ldflags "-s -w -X $(V).Version=$(DEB_VERSION_UPSTREAM) \
+	-X $(V).Revision=$(DEB_VERSION) -X $(V).BuildDate=$(BUILDDATE)"
+
+%:
+	dh $@ --buildsystem=golang --builddirectory=$(BUILDDIR)
+
+# The Go module is src/ of the repository.
+override_dh_auto_build:
+	cd $(BUILDDIR)/src/github.com/rayderua/prometheus-serverscom-exporter/src && \
+	  go build $(BUILDFLAGS) -o $(CURDIR)/$(BUILDDIR)/bin/$(DEB_SOURCE) ./cmd/serverscom-exporter
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	dh_auto_install -- --no-source

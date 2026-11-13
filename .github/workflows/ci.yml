@@ -221,6 +221,10 @@ jobs:
             --show-only templates/prometheusrule.yaml | yq '.spec' > "$RUNNER_TEMP/chart.rules.yml"
           promtool check rules "$RUNNER_TEMP/chart.rules.yml"
 
+  deb:
+    name: Debian package
+    uses: ./.github/workflows/deb.yml
+
   alerts:
     name: Alert rules
     runs-on: ubuntu-latest

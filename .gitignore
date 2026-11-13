@@ -22,6 +22,16 @@ go.work.sum
 cache.json
 *.json.tmp-*
 
+# --- Debian package (dpkg-buildpackage) ---
+/build/
+/debian/.debhelper/
+/debian/prometheus-serverscom-exporter/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper.log
+/prometheus-serverscom-exporter-build-deps_*
+
 # --- Helm ---
 # Packaged charts and downloaded chart dependencies
 charts/**/*.tgz
