@@ -2,7 +2,8 @@
 # Smoke and regression test of the exporter against the mock API (test/mockapi):
 #   0. optional, with PREVIOUS: the previous release fills the cache file, and
 #      the new version must still expose every inventory series of the
-#      previous one, with the same value (new series are allowed);
+#      previous one, with the same value (new series are allowed); then the
+#      cache file is removed;
 #   1. the exporter fetches everything and exposes the expected metrics; the
 #      set of series must match test/golden/metrics-shape.txt;
 #   2. after a restart with the API down, it serves the same data from the
@@ -221,6 +222,17 @@ if [[ -n "$PREVIOUS" ]]; then
   stop_exporter
   target_image=$IMAGE
   target_bin=$EXPORTER_BIN
+  start_exporter
+  wait_for "all data after the upgrade" all_data_loaded
+  lost=$(comm -23 "$workdir/inventory.previous" <(inventory "$workdir/metrics.txt"))
+  if [[ -n "$lost" ]]; then
+    echo "$lost"
+    fail "series of the previous release above are missing or changed after the upgrade"
+  fi
+  pass "every inventory series of the previous release is kept after the upgrade"
+  stop_exporter
+  # The first start below fetches everything from the API.
+  if [[ -n "$EXPORTER_BIN" ]]; then rm -rf "$workdir/data"; else docker volume rm "$VOLUME" > /dev/null && docker volume create "$VOLUME" > /dev/null; fi
 fi
 
 echo "== first start: fetch from the API"
@@ -236,15 +248,6 @@ expect "account rate limit" '^serverscom_api_ratelimit_remaining [0-9]'
 expect "hosts refreshed" '^serverscom_exporter_last_refresh_success_timestamp_seconds\{resource="hosts"\}'
 expect "configured intervals fit" '^serverscom_exporter_refresh_interval_stretch_factor 1$'
 expect_none "no refresh errors" '^serverscom_exporter_refresh_errors_total\{.*\} [1-9]'
-
-if [[ -n "$PREVIOUS" ]]; then
-  lost=$(comm -23 "$workdir/inventory.previous" <(inventory "$workdir/metrics.txt"))
-  if [[ -n "$lost" ]]; then
-    echo "$lost"
-    fail "series of the previous release above are missing or changed after the upgrade"
-  fi
-  pass "every inventory series of the previous release is kept after the upgrade"
-fi
 
 wait_for "every refresh loop to run once" all_loops_done
 shape=$workdir/shape.txt
